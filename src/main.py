@@ -1,5 +1,5 @@
 from pyspark import SQLContext
-from pyspark.ml.feature import StopWordsRemover, HashingTF, IDF, Tokenizer, NGram
+from pyspark.ml.feature import StopWordsRemover, HashingTF, IDF, Tokenizer, NGram, CountVectorizer, MinHashLSH, Word2Vec
 from pyspark.sql import SparkSession
 import pyspark.sql.functions as f
 from pyspark.sql.types import ArrayType, StringType
@@ -18,20 +18,53 @@ def main():
     # df = remover.transform(df)
     # df.select("filteredFullText").show(truncate=False)
 
+    # CLASSIFICATION OF OFFENSE
     # compute n-grams
-    ngram = NGram(n=3, inputCol="filteredFullText", outputCol="ngrams")
-    ngramDataFrame = ngram.transform(df)
-    ngramDataFrame.select("ngrams").show(truncate=False)
+    # ngram = NGram(n=2, inputCol="filteredFullText", outputCol="ngrams")
+    # ngramDataFrame = ngram.transform(df)
+    # ngramDataFrame.select("ngrams").show(truncate=False)
+    #
+    # word2vec = Word2Vec(inputCol="filteredFullText", outputCol="vectors")
+    # model = word2vec.fit(df)
+    # model.getVectors().show(truncate=False)
+    # result = model.transform(df)
+    # result.show()
+    # for feature in result.select("vectors").take(3):
+    #     print(feature)
 
     # hashingTF = HashingTF(inputCol="filteredFullText", outputCol="rawFeatures", numFeatures=262144)
     # featurizedData = hashingTF.transform(df)
     # # alternatively, CountVectorizer can also be used to get term frequency vectors
-    #
-    # idf = IDF(inputCol="rawFeatures", outputCol="features")
-    # idfModel = idf.fit(featurizedData)
-    # rescaledData = idfModel.transform(featurizedData)
-    #
+    cv = CountVectorizer(inputCol="filteredFullText", outputCol="rawFeatures", vocabSize=262144, minDF=3.0, minTF=2.0)
+    model = cv.fit(df)
+    result = model.transform(df)
+    # result.select("features").show(truncate=False)
+    # print(model.vocabulary)
+    idf = IDF(inputCol="rawFeatures", outputCol="features")
+    idfModel = idf.fit(result)
+    rescaledData = idfModel.transform(result)
     # rescaledData.select("title", "features").show()
+
+    mh = MinHashLSH(inputCol="features", outputCol="hashes", seed=12345)
+    modelMH = mh.fit(rescaledData)
+    transformedData = modelMH.transform(rescaledData)
+    transformedData.show()
+
+    # create the search df
+    searchData = [("assault", ['aggravated', 'weapon', 'fight', 'assault']),
+             ("rape", ['sexual', 'rape', 'assault', 'harrassment', 'stalk']),
+             ("murder", ['manslaughter', 'death', 'weapon', 'degree', 'kill'])]
+    dfSearch = sc.createDataFrame(searchData, ["term", "keywords"])
+    cvSearch = CountVectorizer(inputCol="keywords", outputCol="rawFeatures", vocabSize=30)
+    modelSearch = cvSearch.fit(dfSearch)
+    resultSearch = modelSearch.transform(dfSearch)
+    modelSearch.approxSimilarityJoin(df, dfSearch, 0.6, distCol="JaccardDistance").show()
+
+    # QUANTIZATION OF SENTENCE DURATION
+
+    # SPLIT BY INDIGENOUS AND NON-INDIGENOUS
+
+    # VISUALIZE RESULTS
 
 
 stop_words = ['the', 'of', 'to', 'and', 'a', 'in', 'that', 'is', 'for', 'was', 'be', 'on', 'not', 'his', 'he', 'as',
@@ -41,14 +74,14 @@ stop_words = ['the', 'of', 'to', 'and', 'a', 'in', 'that', 'is', 'for', 'was', '
               'than', 'out', 'such', 'canlii', 'only', 'in', 'made', 'no', 'more', 'can', 'my',
               'their', 'do', 'you', 'also', 'some', 'what', 'being', 'does', 'because', 'whether', 'both', 'could',
               'about', 'those', 'said', 'its', 'so', 'set', 'very', 'respect', 'cases', 'against', 'ms', 'fact',
-              'para', 'am', 'me', 'law', 'justice', 'consider', 'make', '', ',']
+              'para', 'am', 'me', 'law', 'justice', 'consider', 'make', '', ',', 's', 'c', 'r', 'mr', 'wi']
 
 def cleanFullText(text):
     # remove whitespace and punctuation
-    text = re.split(r'\s+', re.sub(r'[^\w\s]', ' ', text.lower()))
+    text = re.split(r'\s+', re.sub(r'[^\w\s]', ' ', re.sub(r'\W*\b[^\W\d]{1,2}\b', ' ', text.lower())))
 
-    for word in text:
-        word = text2int(word)
+    for index, word in enumerate(text):
+        text[index] = text2int(word).strip()
     return text
 
 def cleanKeywords(text):
@@ -70,6 +103,12 @@ def cleanDf(df):
 
     return df
 
+# def topWords(words, vocabulary, num=5):
+#     top = max(words[1])
+#
+# def mostUsedWords(df, vocabulary, num=5):
+#     topWords_udf = f.udf(topWords, ArrayType(StringType()))
+#     df = df.withColumn("fullTextCleaned", cleanFT_udf(df.fullText))
 
 def text2int (textnum, numwords={}):
     if not numwords:
