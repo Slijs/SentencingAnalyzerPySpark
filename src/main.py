@@ -43,7 +43,7 @@ def main():
     # for feature in result.select("vectors").take(3):
     #     print(feature)
 
-    hashingTF = HashingTF(inputCol="offenseKeywords", outputCol="rawFeatures", numFeatures=262144)
+    hashingTF = HashingTF(inputCol="offenseKeywords", outputCol="rawFeatures", numFeatures=1000)
     result = hashingTF.transform(df)
     resultSearch = hashingTF.transform(dfSearch)
     # # alternatively, CountVectorizer can also be used to get term frequency vectors
@@ -79,7 +79,7 @@ def main():
     # categorizedDf = searchForCategories(modelMHSearch, transformedDataSearch, transformedData)
     # categorizedDf.show()
 
-    categorizedDf = modelMHSearch.approxSimilarityJoin(transformedDataSearch, transformedData, 0.9, distCol="JaccardDistance")
+    categorizedDf = modelMHSearch.approxSimilarityJoin(transformedDataSearch, transformedData, 0.88, distCol="JaccardDistance")
     categorizedDf.select([f.col('datasetA.term')] + [f.col('datasetB.caseID')] + [f.col("JaccardDistance")]) \
         .orderBy('caseID', 'JaccardDistance').show(200)
 
@@ -101,15 +101,15 @@ stop_words = ['the', 'of', 'to', 'and', 'a', 'in', 'that', 'is', 'for', 'was', '
 
 searchData = [("assault", ['aggravated', 'assaulted', 'domestic', 'fight', 'assault', 'assaulting', 'threats', 'bodily', 'harm', 'attacked', 'attack', 'punched', 'punch']),
               ("sexual offences", ['sexual', 'sex', 'consent', 'abuse', 'abused', 'rape', 'incest', 'molester', 'touching', 'penis', 'vagina', 'breasts', 'breast', 'grope', 'groped']),
-              ("homicide", ['manslaughter', 'murder', 'death', 'weapon', 'kill', 'meditated', 'premeditated', 'died', 'accidental']),
+              ("homicide", ['manslaughter', 'murder', 'death', 'weapon', 'kill', 'killing', 'deceased', 'meditated', 'premeditated', 'died', 'accidental']),
               ("terrorism", ['group', 'terrorism', 'terrorist']),
-              ("drugs", ['drug', 'drugs', 'trafficking', 'crack', 'cocaine', 'heroin', 'kilogram', 'kilograms', 'pound', 'pounds', 'ounces', 'grams', 'marijuana', 'intoxicating', 'methamphetamine', 'meth', 'lsd']),
+              ("drug offences", ['drug', 'drugs', 'trafficking', 'crack', 'cocaine', 'heroin', 'kilogram', 'kilograms', 'pound', 'pounds', 'ounces', 'grams', 'marijuana', 'intoxicating', 'methamphetamine', 'meth', 'lsd']),
               ("robbery", ['robbery', 'robbed', 'rob', 'stole', 'stolen', 'break', 'enter', 'theft', '348']),
-              ("weapon", ['weapon', 'firearm', 'firearms', 'pistol', 'rifle', 'knife', 'pointing', 'firing', 'fired', 'armed']),
+              ("weapon", ['weapon', 'firearm', 'firearms', 'pistol', 'rifle', 'knife', 'stabbed', 'stabbing', 'firing', 'fired', 'shooting', 'armed']),
               ("fraud", ['forgery', 'forging', 'fraud', 'impersonation', 'cheque', 'cheques', 'sum', 'financial', 'money', 'monies', 'deprivation', 'fraudulent', 'defraud', 'defrauded', 'defrauding', 'deceits', 'deceit', 'falsehood', 'breach', 'trust', 'con', 'artist', 'forgery']),
               ("child pornography", ['child', 'pornography', 'vile', 'disgusting', 'distribution', 'repulsive', 'underage']),
               ("mischief", ['mischief']),
-              ("driving offences", ['253', 'driving', 'accident', 'highway', 'traffic', 'suspended', 'hta', 'stunt', 'plates', 'careless', 'automobile', 'motor', 'vehicle', 'operate', 'alcohol', 'impaired']),
+              ("driving offences", ['253', 'driving', 'highway', 'traffic', 'suspended', 'hta', 'stunt', 'plates', 'careless', 'automobile', 'motor', 'vehicle', 'operate']),
               ("court-related offences", ['perjury', 'breaching', 'breach', 'condition', 'comply', '731', '139', '145', '264']),
               ("tax offences", ['evading', 'evade', 'tax', 'income', 'taxation', 'hiding'])]
 
