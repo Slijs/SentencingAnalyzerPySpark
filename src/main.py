@@ -8,7 +8,6 @@ import re
 
 
 
-
 def main():
     sc = SparkSession.builder.appName("SentencingAnalyzer").getOrCreate()
     sqlContext = SQLContext(sc)
@@ -30,10 +29,7 @@ def main():
     # df.select("filteredFullText").show(truncate=False)
 
     # CLASSIFICATION OF OFFENSE
-    # compute n-grams
-    # ngram = NGram(n=2, inputCol="filteredFullText", outputCol="ngrams")
-    # ngramDataFrame = ngram.transform(df)
-    # ngramDataFrame.select("ngrams").show(truncate=False)
+
     #
     # word2vec = Word2Vec(inputCol="filteredFullText", outputCol="vectors")
     # model = word2vec.fit(df)
@@ -79,12 +75,18 @@ def main():
     # categorizedDf = searchForCategories(modelMHSearch, transformedDataSearch, transformedData)
     # categorizedDf.show()
 
-    categorizedDf = modelMHSearch.approxSimilarityJoin(transformedDataSearch, transformedData, 0.88, distCol="JaccardDistance")
-    categorizedDf.select([f.col('datasetA.term')] + [f.col('datasetB.caseID')] + [f.col("JaccardDistance")]) \
-        .orderBy('caseID', 'JaccardDistance').show(200)
+    # categorizedDf = modelMHSearch.approxSimilarityJoin(transformedDataSearch, transformedData, 0.88, distCol="JaccardDistance")
+    # categorizedDf.select([f.col('datasetA.term')] + [f.col('datasetB.caseID')] + [f.col("JaccardDistance")]) \
+    #     .orderBy('caseID', 'JaccardDistance').show(200)
 
     # QUANTIZATION OF SENTENCE DURATION
+    # compute n-grams
 
+
+    ngram = NGram(n=3, inputCol="filteredFullText", outputCol="ngrams")
+    ngramDataFrame = ngram.transform(df)
+    ngramDataFrame = getTimeRelatedNGrams(ngramDataFrame)
+    ngramDataFrame.select('caseID', 'timeKeywords').show(200, truncate=False)
     # SPLIT BY INDIGENOUS AND NON-INDIGENOUS
 
     # VISUALIZE RESULTS
@@ -112,6 +114,10 @@ searchData = [("assault", ['aggravated', 'assaulted', 'domestic', 'fight', 'assa
               ("driving offences", ['253', 'driving', 'highway', 'traffic', 'suspended', 'hta', 'stunt', 'plates', 'careless', 'automobile', 'motor', 'vehicle', 'operate']),
               ("court-related offences", ['perjury', 'breaching', 'breach', 'condition', 'comply', '731', '139', '145', '264']),
               ("tax offences", ['evading', 'evade', 'tax', 'income', 'taxation', 'hiding'])]
+
+timeRelatedWords = ['day', 'days', 'month', 'months', 'year', 'years']
+
+
 
 def cleanFullText(text):
     # remove whitespace and punctuation
@@ -155,6 +161,30 @@ def offenseKeywords(textArray):
 def extractOffenseKeywords(df):
     offenseKeywords_udf = f.udf(offenseKeywords, ArrayType(StringType()))
     df = df.withColumn("offenseKeywords", offenseKeywords_udf(df.filteredFullText))
+    return df
+
+
+def timeKeywords(textArray):
+    ngrams = []
+    for ngram in textArray:
+        words = ngram.split(' ')
+        quantityFound = False
+        for word in words:
+            if word.isdigit():
+                quantityFound = True
+        if not quantityFound:
+            continue
+        for word in words:
+            for keyword in timeRelatedWords:
+                if word == keyword:
+                    ngrams.append(ngram)
+                    break
+    return ngrams
+
+
+def getTimeRelatedNGrams(df):
+    timeKeywords_udf = f.udf(timeKeywords, ArrayType(StringType()))
+    df = df.withColumn("timeKeywords", timeKeywords_udf(df.ngrams))
     return df
 
 
