@@ -5,13 +5,24 @@ import pyspark.sql.functions as f
 from pyspark.sql.types import ArrayType, StringType
 import re
 
+
+
+
+
 def main():
     sc = SparkSession.builder.appName("SentencingAnalyzer").getOrCreate()
     sqlContext = SQLContext(sc)
     print(sc.version)
 
+    # main df
     cases = sc.read.json("../data/sentencingCases.jsonl")
     df = cleanDf(cases)
+
+    # create the search df
+    df = extractOffenseKeywords(df)
+    # df.select("Title", "caseID", "offenseKeywords").show(200, truncate=False)
+    dfSearch = sc.createDataFrame(searchData, ["term", "offenseKeywords"])
+
     # tokenizer = Tokenizer(inputCol="fullText", outputCol="words")
     # df = tokenizer.transform(cases)
     # remover = StopWordsRemover(inputCol="words", outputCol="filteredWords", stopWords=stop_words)
@@ -32,33 +43,45 @@ def main():
     # for feature in result.select("vectors").take(3):
     #     print(feature)
 
-    # hashingTF = HashingTF(inputCol="filteredFullText", outputCol="rawFeatures", numFeatures=262144)
-    # featurizedData = hashingTF.transform(df)
+    hashingTF = HashingTF(inputCol="offenseKeywords", outputCol="rawFeatures", numFeatures=262144)
+    result = hashingTF.transform(df)
+    resultSearch = hashingTF.transform(dfSearch)
     # # alternatively, CountVectorizer can also be used to get term frequency vectors
-    cv = CountVectorizer(inputCol="filteredFullText", outputCol="rawFeatures", vocabSize=262144, minDF=3.0, minTF=2.0)
-    model = cv.fit(df)
-    result = model.transform(df)
-    # result.select("features").show(truncate=False)
-    # print(model.vocabulary)
+
+
+
+    # cv = CountVectorizer(inputCol="offenseKeywords", outputCol="rawFeatures", vocabSize=500)
+    # model = cv.fit(df)
+    # result = model.transform(df)
+    # modelSearch = cv.fit(dfSearch)
+    # resultSearch = modelSearch.transform(dfSearch)
+
     idf = IDF(inputCol="rawFeatures", outputCol="features")
     idfModel = idf.fit(result)
     rescaledData = idfModel.transform(result)
-    # rescaledData.select("title", "features").show()
+    idfModelSearch = idf.fit(resultSearch)
+    rescaledDataSearch = idfModelSearch.transform(resultSearch)
 
-    mh = MinHashLSH(inputCol="features", outputCol="hashes", seed=12345)
+    mh = MinHashLSH(inputCol="features", outputCol="hashes", seed=12345, numHashTables=10)
     modelMH = mh.fit(rescaledData)
     transformedData = modelMH.transform(rescaledData)
-    transformedData.show()
 
-    # create the search df
-    searchData = [("assault", ['aggravated', 'weapon', 'fight', 'assault']),
-             ("rape", ['sexual', 'rape', 'assault', 'harrassment', 'stalk']),
-             ("murder", ['manslaughter', 'death', 'weapon', 'degree', 'kill'])]
-    dfSearch = sc.createDataFrame(searchData, ["term", "keywords"])
-    cvSearch = CountVectorizer(inputCol="keywords", outputCol="rawFeatures", vocabSize=30)
-    modelSearch = cvSearch.fit(dfSearch)
-    resultSearch = modelSearch.transform(dfSearch)
-    modelSearch.approxSimilarityJoin(df, dfSearch, 0.6, distCol="JaccardDistance").show()
+    modelMHSearch = mh.fit(rescaledDataSearch)
+    transformedDataSearch = modelMH.transform(rescaledDataSearch)
+    # transformedDataSearch.show()
+    # transformedDataSearch.printSchema()
+    #
+    # asd = transformedDataSearch.rdd.collect()
+    # print(asd[:][4])
+    # # print(offenseKeywordHashes)
+
+    # categorizedDf = transformedData.alias('a').join(transformedDataSearch.alias('b'), f.col('b.id') == f.col('a.id')).select([f.col('a.'+xx) for xx in transformedData.columns] + [f.col('b.other1'),f.col('b.other2')])
+    # categorizedDf = searchForCategories(modelMHSearch, transformedDataSearch, transformedData)
+    # categorizedDf.show()
+
+    categorizedDf = modelMHSearch.approxSimilarityJoin(transformedDataSearch, transformedData, 0.9, distCol="JaccardDistance")
+    categorizedDf.select([f.col('datasetA.term')] + [f.col('datasetB.caseID')] + [f.col("JaccardDistance")]) \
+        .orderBy('caseID', 'JaccardDistance').show(200)
 
     # QUANTIZATION OF SENTENCE DURATION
 
@@ -75,6 +98,20 @@ stop_words = ['the', 'of', 'to', 'and', 'a', 'in', 'that', 'is', 'for', 'was', '
               'their', 'do', 'you', 'also', 'some', 'what', 'being', 'does', 'because', 'whether', 'both', 'could',
               'about', 'those', 'said', 'its', 'so', 'set', 'very', 'respect', 'cases', 'against', 'ms', 'fact',
               'para', 'am', 'me', 'law', 'justice', 'consider', 'make', '', ',', 's', 'c', 'r', 'mr', 'wi']
+
+searchData = [("assault", ['aggravated', 'assaulted', 'domestic', 'fight', 'assault', 'assaulting', 'threats', 'bodily', 'harm', 'attacked', 'attack', 'punched', 'punch']),
+              ("sexual offenses", ['sexual', 'sex', 'abuse', 'abused', 'rape', 'assault', 'bodily', 'harm', 'incest', 'molester']),
+              ("murder", ['manslaughter', 'death', 'weapon', 'degree', 'kill']),
+              ("terrorism", ['group', 'terrorism', 'terrorist']),
+              ("drugs", ['drug', 'drugs', 'trafficking', 'crack', 'cocaine', 'heroin', 'kilogram', 'kilograms', 'pound', 'pounds', 'ounces', 'grams', 'marijuana', 'intoxicating']),
+              ("robbery", ['robbery', 'robbed', 'rob', 'stole', 'stolen', 'break', 'enter', 'theft', '348']),
+              ("weapon", ['weapon', 'firearm', 'firearms', 'pistol', 'rifle', 'knife', 'pointing', 'firing', 'fired', 'armed']),
+              ("fraud", ['forgery', 'forging', 'fraud', 'cheque', 'cheques', 'sum', 'financial', 'money', 'monies', 'deprivation', 'fraudulent', 'defraud', 'defrauded', 'defrauding', 'deceits', 'deceit', 'falsehood', 'breach', 'trust', 'con', 'artist', 'forgery']),
+              ("child pornography", ['child', 'pornography', 'vile', 'disgusting', 'distribution', 'repulsive']),
+              ("mischief", ['mischief']),
+              ("driving illegally", ['253', 'driving', 'accident', 'highway', 'traffic', 'suspended', 'hta', 'stunt', 'plates', 'careless', 'automobile', 'motor', 'vehicle', 'operate', 'alcohol', 'impaired']),
+              ("court-related offenses", ['perjury', 'breaching', 'breach', 'condition', 'comply', '731', '139', '145', '264']),
+              ("tax offenses", ['evading', 'evade', 'tax', 'income', 'taxation'])]
 
 def cleanFullText(text):
     # remove whitespace and punctuation
@@ -103,12 +140,44 @@ def cleanDf(df):
 
     return df
 
-# def topWords(words, vocabulary, num=5):
-#     top = max(words[1])
+
+def offenseKeywords(textArray):
+    words = []
+    for word in textArray:
+        for category in searchData:
+            for keyword in category[1]:
+                if word == keyword:
+                    words.append(word)
+                    break
+    return words
+
+
+def extractOffenseKeywords(df):
+    offenseKeywords_udf = f.udf(offenseKeywords, ArrayType(StringType()))
+    df = df.withColumn("offenseKeywords", offenseKeywords_udf(df.filteredFullText))
+    return df
+
+
+# def findOffenseCategory(hash):
+#     model.approxNearestNeighbors(dfToSearch, hash, 2).show()
+#     asdf = []
+#     asdf.append('hey')
+#     return asdf
 #
-# def mostUsedWords(df, vocabulary, num=5):
-#     topWords_udf = f.udf(topWords, ArrayType(StringType()))
-#     df = df.withColumn("fullTextCleaned", cleanFT_udf(df.fullText))
+#
+# def searchForCategories(model, dfToSearch, df):
+#     findOffenseCategory_udf = f.udf(findOffenseCategory, ArrayType(StringType()))
+#     df.withColumn("offenseCategory", findOffenseCategory_udf(df.filteredFullText))
+#     return df
+
+
+def topWords(words, vocabulary, num=5):
+    top = max(words[1])
+
+
+def mostUsedWords(df, vocabulary, num=5):
+    topWords_udf = f.udf(topWords, ArrayType(StringType()))
+    df = df.withColumn("fullTextCleaned", cleanFT_udf(df.fullText))
 
 def text2int (textnum, numwords={}):
     if not numwords:
