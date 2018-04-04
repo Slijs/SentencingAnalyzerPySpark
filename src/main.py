@@ -100,18 +100,18 @@ stop_words = ['the', 'of', 'to', 'and', 'a', 'in', 'that', 'is', 'for', 'was', '
               'para', 'am', 'me', 'law', 'justice', 'consider', 'make', '', ',', 's', 'c', 'r', 'mr', 'wi']
 
 searchData = [("assault", ['aggravated', 'assaulted', 'domestic', 'fight', 'assault', 'assaulting', 'threats', 'bodily', 'harm', 'attacked', 'attack', 'punched', 'punch']),
-              ("sexual offenses", ['sexual', 'sex', 'abuse', 'abused', 'rape', 'assault', 'bodily', 'harm', 'incest', 'molester']),
-              ("murder", ['manslaughter', 'death', 'weapon', 'degree', 'kill']),
+              ("sexual offences", ['sexual', 'sex', 'consent', 'abuse', 'abused', 'rape', 'incest', 'molester', 'touching', 'penis', 'vagina', 'breasts', 'breast', 'grope', 'groped']),
+              ("homicide", ['manslaughter', 'murder', 'death', 'weapon', 'kill', 'meditated', 'premeditated', 'died', 'accidental']),
               ("terrorism", ['group', 'terrorism', 'terrorist']),
-              ("drugs", ['drug', 'drugs', 'trafficking', 'crack', 'cocaine', 'heroin', 'kilogram', 'kilograms', 'pound', 'pounds', 'ounces', 'grams', 'marijuana', 'intoxicating']),
+              ("drugs", ['drug', 'drugs', 'trafficking', 'crack', 'cocaine', 'heroin', 'kilogram', 'kilograms', 'pound', 'pounds', 'ounces', 'grams', 'marijuana', 'intoxicating', 'methamphetamine', 'meth', 'lsd']),
               ("robbery", ['robbery', 'robbed', 'rob', 'stole', 'stolen', 'break', 'enter', 'theft', '348']),
               ("weapon", ['weapon', 'firearm', 'firearms', 'pistol', 'rifle', 'knife', 'pointing', 'firing', 'fired', 'armed']),
-              ("fraud", ['forgery', 'forging', 'fraud', 'cheque', 'cheques', 'sum', 'financial', 'money', 'monies', 'deprivation', 'fraudulent', 'defraud', 'defrauded', 'defrauding', 'deceits', 'deceit', 'falsehood', 'breach', 'trust', 'con', 'artist', 'forgery']),
-              ("child pornography", ['child', 'pornography', 'vile', 'disgusting', 'distribution', 'repulsive']),
+              ("fraud", ['forgery', 'forging', 'fraud', 'impersonation', 'cheque', 'cheques', 'sum', 'financial', 'money', 'monies', 'deprivation', 'fraudulent', 'defraud', 'defrauded', 'defrauding', 'deceits', 'deceit', 'falsehood', 'breach', 'trust', 'con', 'artist', 'forgery']),
+              ("child pornography", ['child', 'pornography', 'vile', 'disgusting', 'distribution', 'repulsive', 'underage']),
               ("mischief", ['mischief']),
-              ("driving illegally", ['253', 'driving', 'accident', 'highway', 'traffic', 'suspended', 'hta', 'stunt', 'plates', 'careless', 'automobile', 'motor', 'vehicle', 'operate', 'alcohol', 'impaired']),
-              ("court-related offenses", ['perjury', 'breaching', 'breach', 'condition', 'comply', '731', '139', '145', '264']),
-              ("tax offenses", ['evading', 'evade', 'tax', 'income', 'taxation'])]
+              ("driving offences", ['253', 'driving', 'accident', 'highway', 'traffic', 'suspended', 'hta', 'stunt', 'plates', 'careless', 'automobile', 'motor', 'vehicle', 'operate', 'alcohol', 'impaired']),
+              ("court-related offences", ['perjury', 'breaching', 'breach', 'condition', 'comply', '731', '139', '145', '264']),
+              ("tax offences", ['evading', 'evade', 'tax', 'income', 'taxation', 'hiding'])]
 
 def cleanFullText(text):
     # remove whitespace and punctuation
@@ -171,13 +171,13 @@ def extractOffenseKeywords(df):
 #     return df
 
 
-def topWords(words, vocabulary, num=5):
-    top = max(words[1])
-
-
-def mostUsedWords(df, vocabulary, num=5):
-    topWords_udf = f.udf(topWords, ArrayType(StringType()))
-    df = df.withColumn("fullTextCleaned", cleanFT_udf(df.fullText))
+# def topWords(words, vocabulary, num=5):
+#     top = max(words[1])
+#
+#
+# def mostUsedWords(df, vocabulary, num=5):
+#     topWords_udf = f.udf(topWords, ArrayType(StringType()))
+#     df = df.withColumn("fullTextCleaned", cleanFT_udf(df.fullText))
 
 def text2int (textnum, numwords={}):
     if not numwords:
