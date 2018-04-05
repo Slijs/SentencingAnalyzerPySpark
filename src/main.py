@@ -9,9 +9,20 @@ import re
 
 
 def main():
-    sc = SparkSession.builder.appName("SentencingAnalyzer").getOrCreate()
+    sc = SparkSession.builder.appName("SentencingAnalyzer")\
+        .config("spark.driver.memory", "10G")\
+        .getOrCreate()
+    # sc.conf.set("spark.sql.shuffle.partitions", 6)
+    # sc.conf.set("spark.executor.memory", "10G")
+    # sc.conf.set("spark.driver.memory", "4G")
+    # configMap: Map[String, String] = spark.conf.getAll()
+    # print(sc.conf.get("spark.executor.memory"))
+    # print(sc.conf.get("spark.executor.cores"))
+    # print(sc.conf.get("spark.memory.fraction"))
+    # print(sc.conf.get("spark.driver.memory"))
+
     sqlContext = SQLContext(sc)
-    print(sc.version)
+    # print(sc.version)
 
     # main df
     cases = sc.read.json("../data/sentencingCases.jsonl")
@@ -57,36 +68,25 @@ def main():
     rescaledData = idfModel.transform(result)
     idfModelSearch = idf.fit(resultSearch)
     rescaledDataSearch = idfModelSearch.transform(resultSearch)
+    # rescaledDataSearch.show(truncate=False)
 
-    mh = MinHashLSH(inputCol="features", outputCol="hashes", seed=12345, numHashTables=10)
+    mh = MinHashLSH(inputCol="features", outputCol="hashes", seed=12345, numHashTables=20)
     modelMH = mh.fit(rescaledData)
     transformedData = modelMH.transform(rescaledData)
 
     modelMHSearch = mh.fit(rescaledDataSearch)
     transformedDataSearch = modelMH.transform(rescaledDataSearch)
-    # transformedDataSearch.show()
-    # transformedDataSearch.printSchema()
-    #
-    # asd = transformedDataSearch.rdd.collect()
-    # print(asd[:][4])
-    # # print(offenseKeywordHashes)
 
-    # categorizedDf = transformedData.alias('a').join(transformedDataSearch.alias('b'), f.col('b.id') == f.col('a.id')).select([f.col('a.'+xx) for xx in transformedData.columns] + [f.col('b.other1'),f.col('b.other2')])
-    # categorizedDf = searchForCategories(modelMHSearch, transformedDataSearch, transformedData)
-    # categorizedDf.show()
-
-    # categorizedDf = modelMHSearch.approxSimilarityJoin(transformedDataSearch, transformedData, 0.88, distCol="JaccardDistance")
-    # categorizedDf.select([f.col('datasetA.term')] + [f.col('datasetB.caseID')] + [f.col("JaccardDistance")]) \
-    #     .orderBy('caseID', 'JaccardDistance').show(200)
+    categorizedDf = modelMHSearch.approxSimilarityJoin(transformedDataSearch, transformedData, 0.88, distCol="JaccardDistance")
+    categorizedDf.select([f.col('datasetA.term')] + [f.col('datasetB.caseID')] + [f.col("JaccardDistance")]) \
+        .orderBy('caseID', 'JaccardDistance').show(200)
 
     # QUANTIZATION OF SENTENCE DURATION
     # compute n-grams
-
-
-    ngram = NGram(n=3, inputCol="filteredFullText", outputCol="ngrams")
-    ngramDataFrame = ngram.transform(df)
-    ngramDataFrame = getTimeRelatedNGrams(ngramDataFrame)
-    ngramDataFrame.select('caseID', 'timeKeywords').show(200, truncate=False)
+    # ngram = NGram(n=3, inputCol="filteredFullText", outputCol="ngrams")
+    # ngramDataFrame = ngram.transform(df)
+    # ngramDataFrame = getTimeRelatedNGrams(ngramDataFrame)
+    # ngramDataFrame.select('caseID', 'timeKeywords').show(200, truncate=False)
     # SPLIT BY INDIGENOUS AND NON-INDIGENOUS
 
     # VISUALIZE RESULTS
@@ -116,6 +116,9 @@ searchData = [("assault", ['aggravated', 'assaulted', 'domestic', 'fight', 'assa
               ("tax offences", ['evading', 'evade', 'tax', 'income', 'taxation', 'hiding'])]
 
 timeRelatedWords = ['day', 'days', 'month', 'months', 'year', 'years']
+
+sentenceRelatedWords = ['imprisonment', 'prison', 'sentenced', 'sentence', 'probation', 'incarceration', 'intermittent',
+                        'concurrent', 'reduced', 'incarceration', 'correctional', 'jail', 'supervised', 'custodial']
 
 
 
