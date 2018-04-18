@@ -78,15 +78,15 @@ def main():
     transformedDataSearch = modelMH.transform(rescaledDataSearch)
 
     categorizedDf = modelMHSearch.approxSimilarityJoin(transformedDataSearch, transformedData, 0.88, distCol="JaccardDistance")
-    categorizedDf.select([f.col('datasetA.term')] + [f.col('datasetB.caseID')] + [f.col("JaccardDistance")]) \
-        .orderBy('caseID', 'JaccardDistance').show(200)
+    # categorizedDf.select([f.col('datasetA.term')] + [f.col('datasetB.caseID')] + [f.col("JaccardDistance")]) \
+    #     .orderBy('caseID', 'JaccardDistance').show(200)
 
     # QUANTIZATION OF SENTENCE DURATION
     # compute n-grams
-    # ngram = NGram(n=3, inputCol="filteredFullText", outputCol="ngrams")
-    # ngramDataFrame = ngram.transform(df)
-    # ngramDataFrame = getTimeRelatedNGrams(ngramDataFrame)
-    # ngramDataFrame.select('caseID', 'timeKeywords').show(200, truncate=False)
+    ngram = NGram(n=3, inputCol="filteredFullText", outputCol="ngrams")
+    ngramDataFrame = ngram.transform(df)
+    ngramDataFrame = getTimeRelatedNGrams(ngramDataFrame)
+    ngramDataFrame.select('caseID', 'timeKeywords').show(200, truncate=False)
     # SPLIT BY INDIGENOUS AND NON-INDIGENOUS
 
     # VISUALIZE RESULTS
@@ -116,6 +116,8 @@ searchData = [("assault", ['aggravated', 'assaulted', 'domestic', 'fight', 'assa
               ("tax offences", ['evading', 'evade', 'tax', 'income', 'taxation', 'hiding'])]
 
 timeRelatedWords = ['day', 'days', 'month', 'months', 'year', 'years']
+
+ageRelatedWords = ['old', 'age', 'aged', 'young', 'when', 'victim', 'accused', 'person', 'ago', 'turned']
 
 sentenceRelatedWords = ['imprisonment', 'prison', 'sentenced', 'sentence', 'probation', 'incarceration', 'intermittent',
                         'concurrent', 'reduced', 'incarceration', 'correctional', 'jail', 'supervised', 'custodial']
@@ -176,6 +178,15 @@ def timeKeywords(textArray):
             if word.isdigit():
                 quantityFound = True
         if not quantityFound:
+            continue
+        ageRelatedWordFound = False
+        for word in words:
+            for keyword in ageRelatedWords:
+                # skip any ngrams that are talking about someone's age
+                if word == keyword:
+                    ageRelatedWordFound = True
+                    break
+        if ageRelatedWordFound:
             continue
         for word in words:
             for keyword in timeRelatedWords:
