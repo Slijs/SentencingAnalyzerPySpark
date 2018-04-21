@@ -16,17 +16,6 @@ def main():
     sc = SparkSession.builder.appName("SentencingAnalyzer")\
         .config("spark.driver.memory", "10G")\
         .getOrCreate()
-    # sc.conf.set("spark.sql.shuffle.partitions", 6)
-    # sc.conf.set("spark.executor.memory", "10G")
-    # sc.conf.set("spark.driver.memory", "4G")
-    # configMap: Map[String, String] = spark.conf.getAll()
-    # print(sc.conf.get("spark.executor.memory"))
-    # print(sc.conf.get("spark.executor.cores"))
-    # print(sc.conf.get("spark.memory.fraction"))
-    # print(sc.conf.get("spark.driver.memory"))
-
-    sqlContext = SQLContext(sc)
-    # print(sc.version)
 
     # main df
     cases = sc.read.json("../data/sentencingCases2.jsonl")
@@ -34,43 +23,17 @@ def main():
 
     # read categorized csv
     categorizedCsv = sc.read.csv("../data/categorized.csv", header=True)
-    # categorizedCsv = splitCategorizedCsvOffenceTypes(categorizedCsv).select('caseName', 'type')
     categorizedCsv =categorizedCsv.select('caseName', f.split(f.col("type"), " - ").alias('offenseType'), 'duration1', 'sentenceType1')
 
     # create the search df
     df = extractOffenseKeywords(df)
-    # df.select("Title", "caseID", "offenseKeywords").show(200, truncate=False)
+    df.cache()
     dfSearch = sc.createDataFrame(searchData, ["term", "offenseKeywords"])
 
-    # tokenizer = Tokenizer(inputCol="fullText", outputCol="words")
-    # df = tokenizer.transform(cases)
-    # remover = StopWordsRemover(inputCol="words", outputCol="filteredWords", stopWords=stop_words)
-    # df = remover.transform(df)
-    # df.select("filteredFullText").show(truncate=False)
-
     # CLASSIFICATION OF OFFENSE
-
-    #
-    # word2vec = Word2Vec(inputCol="filteredFullText", outputCol="vectors")
-    # model = word2vec.fit(df)
-    # model.getVectors().show(truncate=False)
-    # result = model.transform(df)
-    # result.show()
-    # for feature in result.select("vectors").take(3):
-    #     print(feature)
-
     hashingTF = HashingTF(inputCol="offenseKeywords", outputCol="rawFeatures", numFeatures=1000)
     result = hashingTF.transform(df)
     resultSearch = hashingTF.transform(dfSearch)
-    # # alternatively, CountVectorizer can also be used to get term frequency vectors
-
-
-
-    # cv = CountVectorizer(inputCol="offenseKeywords", outputCol="rawFeatures", vocabSize=500)
-    # model = cv.fit(df)
-    # result = model.transform(df)
-    # modelSearch = cv.fit(dfSearch)
-    # resultSearch = modelSearch.transform(dfSearch)
 
     idf = IDF(inputCol="rawFeatures", outputCol="features")
     idfModel = idf.fit(result)
@@ -88,74 +51,49 @@ def main():
     categorizedDf = modelMHSearch.approxSimilarityJoin(transformedDataSearch, transformedData, 0.89, distCol="JaccardDistance")
     distanceDf = categorizedDf.select([f.col('datasetA.term')] + [f.col('datasetB.caseID')] + [f.col("JaccardDistance")]) \
         .orderBy('caseID', 'JaccardDistance')
+    distanceDf = distanceDf.groupBy('caseID').agg(f.collect_list('term').alias('predictedOffences'), f.collect_list('JaccardDistance').alias('JaccardDistances'))
+    distanceDf.cache()
+    distanceDf.show()
 
     # EVALUATE CATEGORIZATION AGAINST MANUAL CATEGORIZATION
-    distanceDf = distanceDf.join(categorizedCsv, distanceDf.caseID == categorizedCsv.caseName).select('caseId', 'term', 'JaccardDistance', 'offenseType')
-    distanceDf = distanceDf.groupBy('caseId').agg(f.collect_list('term').alias('predictedOffences'), f.collect_list('JaccardDistance').alias('JaccardDistances'), f.first('offenseType').alias('actualOffences'))
-    distanceDf = distanceDf.filter(distanceDf.actualOffences[0] != "N/A").filter(distanceDf.actualOffences[0] != "multiple party sentence")
-    # evaluate errors
+    distanceDfEval = distanceDf.join(categorizedCsv, distanceDf.caseID == categorizedCsv.caseName)
+    distanceDfEval = distanceDfEval.filter(distanceDfEval.offenseType[0] != "N/A").filter(distanceDfEval.offenseType[0] != "multiple party sentence")
     calcuateDifferenceInPredictedVsActualOffences_udf = f.udf(calcuateDifferenceInPredictedVsActualOffences, FloatType())
-    distanceDf = distanceDf.withColumn("error", calcuateDifferenceInPredictedVsActualOffences_udf(distanceDf.predictedOffences, distanceDf.actualOffences))
-    rmse = (distanceDf.groupBy().agg(f.sum('error')).collect()[0][0]/distanceDf.count())**(1.0/2)
-    print("RMSE:", rmse)
-
+    distanceDfEval = distanceDfEval.withColumn("error", calcuateDifferenceInPredictedVsActualOffences_udf(distanceDfEval.predictedOffences, distanceDfEval.offenseType))
+    rmse = (distanceDfEval.groupBy().agg(f.sum('error')).collect()[0][0]/distanceDfEval.count())**(1.0/2)
+    print("Offense category RMSE:", rmse)
 
     # QUANTIZATION OF SENTENCE DURATION
     # compute n-grams
-    # ngram = NGram(n=3, inputCol="filteredFullText", outputCol="ngrams")
-    # ngramDataFrame = ngram.transform(df)
-    # ngramDataFrame = getTimeRelatedNGrams(ngramDataFrame)
-    # categorizedNgrams = ngramDataFrame.join(categorizedCsv, ngramDataFrame.caseID == categorizedCsv.caseName).select('caseId', 'duration1', 'timeKeywords')
-    # categorizedNgrams = categorizedNgrams.filter(categorizedNgrams.duration1 != "null").filter(f.size('timeKeywords') != 0)
-    #
-    # convertDurationsToDays_udf = f.udf(convertDurationsToDays, ArrayType(FloatType()))
-    # mostCommon_udf = f.udf(mostCommon, FloatType())
-    # quantified = categorizedNgrams\
-    #     .withColumn("actualDays", convertDurationsToDays_udf(categorizedNgrams.duration1))\
-    #     .withColumn("predictedDays", convertDurationsToDays_udf(categorizedNgrams.timeKeywords))
-    # quantified = quantified.withColumn("actualDays", quantified.actualDays[0]).withColumn("predictedDays", mostCommon_udf(quantified.predictedDays))
-    # quantified.select('caseId', 'actualDays', 'predictedDays').show(200)
-    #
-    # evaluator = RegressionEvaluator(metricName="rmse", labelCol="actualDays", predictionCol="predictedDays")
-    # rmse = evaluator.evaluate(quantified)
-    # print("Root-mean-square error = " + str(rmse))
+    ngram = NGram(n=3, inputCol="filteredFullText", outputCol="ngrams")
+    ngramDataFrame = ngram.transform(df)
+    ngramDataFrame = getTimeRelatedNGrams(ngramDataFrame)
+    convertDurationsToDays_udf = f.udf(convertDurationsToDays, ArrayType(FloatType()))
+    mostCommon_udf = f.udf(mostCommon, FloatType())
+    quantifiedDf = ngramDataFrame.withColumn("predictedDays", convertDurationsToDays_udf(ngramDataFrame.timeKeywords))
+    quantifiedDf = quantifiedDf.withColumn("predictedDays", mostCommon_udf(quantifiedDf.predictedDays))
+    quantifiedDf = quantifiedDf.select('caseID', 'timeKeywords', 'predictedDays')
+    quantifiedDf.cache()
+    # evaluate
+    quantifiedDfEval = quantifiedDf.join(categorizedCsv, ngramDataFrame.caseID == categorizedCsv.caseName).select('caseId', 'duration1', 'timeKeywords', 'predictedDays')
+    quantifiedDfEval = quantifiedDfEval.filter(quantifiedDfEval.duration1 != "null").filter(f.size('timeKeywords') != 0)
+    quantifiedDfEval = quantifiedDfEval.withColumn("actualDays", convertDurationsToDays_udf(quantifiedDfEval.duration1))
+    quantifiedDfEval = quantifiedDfEval.withColumn("actualDays", quantifiedDfEval.actualDays[0])
+    evaluator = RegressionEvaluator(metricName="rmse", labelCol="actualDays", predictionCol="predictedDays")
+    rmse = evaluator.evaluate(quantifiedDfEval)
+    print("Sentence duration RMSE:" + str(rmse))
 
-    # categorizedNgrams = result.join(categorizedCsv, result.caseID == categorizedCsv.caseName).select('caseId', 'duration1', 'rawFeatures')
-    #
-    # # Index labels, adding metadata to the label column.
-    # # Fit on whole dataset to include all labels in index.
-    # labelIndexer = StringIndexer(inputCol="duration1", outputCol="indexedLabel", handleInvalid="skip").fit(categorizedNgrams)
-    # # Automatically identify categorical features, and index them.
-    # # We specify maxCategories so features with > 4 distinct values are treated as continuous.
-    # featureIndexer = VectorIndexer(inputCol="rawFeatures", outputCol="indexedFeatures", maxCategories=100).fit(categorizedNgrams)
-    #
-    # # Split the data into training and test sets (30% held out for testing)
-    # (trainingData, testData) = categorizedNgrams.randomSplit([0.7, 0.3])
-    #
-    # # Train a DecisionTree model.
-    # dt = DecisionTreeClassifier(labelCol="indexedLabel", featuresCol="indexedFeatures")
-    #
-    # # Chain indexers and tree in a Pipeline
-    # pipeline = Pipeline(stages=[labelIndexer, featureIndexer, dt])
-    #
-    # # Train model.  This also runs the indexers.
-    # model = pipeline.fit(trainingData)
-    #
-    # # Make predictions.
-    # predictions = model.transform(testData)
-    #
-    # # Select example rows to display.
-    # predictions.select("prediction", "indexedLabel", 'caseID', 'duration1').show(100, truncate=False)
-
-
-    # ngramDataFrame.select('caseID', 'timeKeywords').show(200, truncate=False)
     # SPLIT BY INDIGENOUS AND NON-INDIGENOUS
     categorizeByIndigeneity_udf = f.udf(categorizeByIndigeneity, BooleanType())
     ethnicityDf = df.withColumn("isIndigenous", categorizeByIndigeneity_udf(df.filteredFullText)).select('caseID', 'isIndigenous')
-    ethnicityDf.show(200)
+    ethnicityDf.cache()
+    ethnicityDf.show()
 
     # CLUSTER
     # combine all previous steps into single df
+    fullyCategorizedDf = distanceDf.join(quantifiedDf.join(ethnicityDf, 'caseID'), 'caseID').select('caseID', 'predictedOffences', 'predictedDays', 'isIndigenous')
+    fullyCategorizedDf.cache()
+    fullyCategorizedDf.show(200, truncate=False)
 
 
     # VISUALIZE RESULTS
@@ -317,6 +255,8 @@ def convertDurationsToDays(text):
 
 
 def mostCommon(listOfDurations):
+    if len(listOfDurations) == 0:
+        return 0.0
     return max(set(listOfDurations), key=listOfDurations.count)
 
 
