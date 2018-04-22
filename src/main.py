@@ -23,6 +23,7 @@ def main():
     # main df
     cases = sc.read.json("../data/sentencingCases2.jsonl")
     df = cleanDf(cases)
+    # df.filter(f.col('caseID') == "2010oncj76").show(200, truncate=False)
 
     # read categorized csv
     categorizedCsv = sc.read.csv("../data/categorized.csv", header=True)
@@ -34,69 +35,74 @@ def main():
     dfSearch = sc.createDataFrame(searchData, ["term", "offenseKeywords"])
 
     # CLASSIFICATION OF OFFENSE
-    hashingTF = HashingTF(inputCol="offenseKeywords", outputCol="rawFeatures", numFeatures=1000)
-    result = hashingTF.transform(df)
-    resultSearch = hashingTF.transform(dfSearch)
-
-    idf = IDF(inputCol="rawFeatures", outputCol="features")
-    idfModel = idf.fit(result)
-    rescaledData = idfModel.transform(result).filter(f.size('offenseKeywords') > 0)
-    idfModelSearch = idf.fit(resultSearch)
-    rescaledDataSearch = idfModelSearch.transform(resultSearch)
-
-    mh = MinHashLSH(inputCol="features", outputCol="hashes", seed=12345, numHashTables=20)
-    modelMH = mh.fit(rescaledData)
-    transformedData = modelMH.transform(rescaledData)
-
-    modelMHSearch = mh.fit(rescaledDataSearch)
-    transformedDataSearch = modelMH.transform(rescaledDataSearch)
-
-    categorizedDf = modelMHSearch.approxSimilarityJoin(transformedDataSearch, transformedData, 0.89, distCol="JaccardDistance")
-    distanceDf = categorizedDf.select([f.col('datasetA.term')] + [f.col('datasetB.caseID')] + [f.col("JaccardDistance")]) \
-        .orderBy('caseID', 'JaccardDistance')
-    distanceDf = distanceDf.groupBy('caseID').agg(f.collect_list('term').alias('predictedOffences'), f.collect_list('JaccardDistance').alias('JaccardDistances'))
-    distanceDf.cache()
-    distanceDf.show()
-
-    # EVALUATE CATEGORIZATION AGAINST MANUAL CATEGORIZATION
-    distanceDfEval = distanceDf.join(categorizedCsv, distanceDf.caseID == categorizedCsv.caseName)
-    distanceDfEval = distanceDfEval.filter(distanceDfEval.offenseType[0] != "N/A").filter(distanceDfEval.offenseType[0] != "multiple party sentence")
-    calcuateDifferenceInPredictedVsActualOffences_udf = f.udf(calcuateDifferenceInPredictedVsActualOffences, FloatType())
-    distanceDfEval = distanceDfEval.withColumn("error", calcuateDifferenceInPredictedVsActualOffences_udf(distanceDfEval.predictedOffences, distanceDfEval.offenseType))
-    calcuateDifferenceInPredictedVsActualOffencesPercentage_udf = f.udf(calcuateDifferenceInPredictedVsActualOffencesPercentage, FloatType())
-    distanceDfEval = distanceDfEval.withColumn("pctCorrect", calcuateDifferenceInPredictedVsActualOffencesPercentage_udf(distanceDfEval.predictedOffences, distanceDfEval.offenseType))
-    distanceDfEval.select('caseID', 'predictedOffences', 'offenseType', 'JaccardDistances', 'error', 'pctCorrect').show(200, truncate=False)
-    rmse = (distanceDfEval.groupBy().agg(f.sum('error')).collect()[0][0]/distanceDfEval.count())**(1.0/2)
-    print("Offense category RMSE:", rmse)
-    pctCorrectOffense = (distanceDfEval.groupBy().agg(f.sum('pctCorrect')).collect()[0][0] / distanceDfEval.count()) * 100
-    print("Percentage of offenses correctly categorized: ", pctCorrectOffense)
+    # hashingTF = HashingTF(inputCol="offenseKeywords", outputCol="rawFeatures", numFeatures=1000)
+    # result = hashingTF.transform(df)
+    # resultSearch = hashingTF.transform(dfSearch)
+    #
+    # idf = IDF(inputCol="rawFeatures", outputCol="features")
+    # idfModel = idf.fit(result)
+    # rescaledData = idfModel.transform(result).filter(f.size('offenseKeywords') > 0)
+    # idfModelSearch = idf.fit(resultSearch)
+    # rescaledDataSearch = idfModelSearch.transform(resultSearch)
+    #
+    # mh = MinHashLSH(inputCol="features", outputCol="hashes", seed=12345, numHashTables=20)
+    # modelMH = mh.fit(rescaledData)
+    # transformedData = modelMH.transform(rescaledData)
+    #
+    # modelMHSearch = mh.fit(rescaledDataSearch)
+    # transformedDataSearch = modelMH.transform(rescaledDataSearch)
+    #
+    # categorizedDf = modelMHSearch.approxSimilarityJoin(transformedDataSearch, transformedData, 0.98, distCol="JaccardDistance")
+    # distanceDf = categorizedDf.select([f.col('datasetA.term')] + [f.col('datasetB.caseID')] + [f.col("JaccardDistance")]) \
+    #     .orderBy('caseID', 'JaccardDistance')
+    # distanceDf = distanceDf.groupBy('caseID').agg(f.collect_list('term').alias('predictedOffences'), f.collect_list('JaccardDistance').alias('JaccardDistances'))
+    # filterExtraOffences_udf = f.udf(filterExtraOffences, ArrayType(StringType()))
+    # distanceDf = distanceDf.withColumn("predictedOffences", filterExtraOffences_udf('predictedOffences', 'JaccardDistances')).select('caseID', 'predictedOffences')
+    # distanceDf.cache()
+    # distanceDf.show(200)
+    #
+    # # EVALUATE CATEGORIZATION AGAINST MANUAL CATEGORIZATION
+    # distanceDfEval = distanceDf.join(categorizedCsv, distanceDf.caseID == categorizedCsv.caseName)
+    # distanceDfEval = distanceDfEval.filter(distanceDfEval.offenseType[0] != "N/A").filter(distanceDfEval.offenseType[0] != "multiple party sentence")
+    # calcuateDifferenceInPredictedVsActualOffences_udf = f.udf(calcuateDifferenceInPredictedVsActualOffences, FloatType())
+    # distanceDfEval = distanceDfEval.withColumn("error", calcuateDifferenceInPredictedVsActualOffences_udf(distanceDfEval.predictedOffences, distanceDfEval.offenseType))
+    # calcuateDifferenceInPredictedVsActualOffencesPercentage_udf = f.udf(calcuateDifferenceInPredictedVsActualOffencesPercentage, FloatType())
+    # distanceDfEval = distanceDfEval.withColumn("pctCorrect", calcuateDifferenceInPredictedVsActualOffencesPercentage_udf(distanceDfEval.predictedOffences, distanceDfEval.offenseType))
+    # distanceDfEval.select('caseID', 'predictedOffences', 'offenseType', 'error', 'pctCorrect').show(200, truncate=False)
+    # rmse = (distanceDfEval.groupBy().agg(f.sum('error')).collect()[0][0]/distanceDfEval.count())**(1.0/2)
+    # print("Offense category RMSE:", rmse)
+    # pctCorrectOffense = (distanceDfEval.groupBy().agg(f.sum('pctCorrect')).collect()[0][0] / distanceDfEval.count()) * 100
+    # print("Percentage of offenses correctly categorized: ", pctCorrectOffense)
+    # print("Num cases categorized:", distanceDf.count())
+    # print("Total cases available:", df.count())
 
     # QUANTIZATION OF SENTENCE DURATION
     # compute n-grams
-    # ngram = NGram(n=3, inputCol="filteredFullText", outputCol="ngrams")
-    # ngramDataFrame = ngram.transform(df)
-    # ngramDataFrame = getTimeRelatedNGrams(ngramDataFrame)
-    # convertDurationsToDays_udf = f.udf(convertDurationsToDays, ArrayType(FloatType()))
-    # mostCommon_udf = f.udf(mostCommon, FloatType())
-    # quantifiedDf = ngramDataFrame.withColumn("predictedDays", convertDurationsToDays_udf(ngramDataFrame.timeKeywords))
-    # quantifiedDf = quantifiedDf.withColumn("predictedDays", mostCommon_udf(quantifiedDf.predictedDays))
-    # quantifiedDf = quantifiedDf.select('caseID', 'timeKeywords', 'predictedDays')
-    # quantifiedDf.cache()
-    # # evaluate
-    # quantifiedDfEval = quantifiedDf.join(categorizedCsv, ngramDataFrame.caseID == categorizedCsv.caseName).select('caseId', 'duration1', 'timeKeywords', 'predictedDays')
-    # quantifiedDfEval = quantifiedDfEval.filter(quantifiedDfEval.duration1 != "null").filter(f.size('timeKeywords') != 0)
-    # quantifiedDfEval = quantifiedDfEval.withColumn("actualDays", convertDurationsToDays_udf(quantifiedDfEval.duration1))
-    # quantifiedDfEval = quantifiedDfEval.withColumn("actualDays", quantifiedDfEval.actualDays[0])
-    # quantifiedDfEval = quantifiedDfEval.withColumn("correctlyPredicted", f.col('predictedDays') == f.col('actualDays'))
-    # evaluator = RegressionEvaluator(metricName="rmse", labelCol="actualDays", predictionCol="predictedDays")
-    # rmse = evaluator.evaluate(quantifiedDfEval)
-    # print("Sentence duration RMSE:" + str(rmse))
-    # numCorrect = quantifiedDfEval.groupBy().agg(f.sum(f.col("correctlyPredicted").cast("long"))).collect()[0][0]
-    # totalCases = quantifiedDfEval.count()
-    # print("numCorrect:", numCorrect)
-    # print("totalCases:", totalCases)
-    # pctCorrect = (numCorrect/totalCases)*100
-    # print("Percentage of sentences correctly predicted: ", pctCorrect)
+    ngram = NGram(n=3, inputCol="filteredFullText", outputCol="ngrams")
+    ngramDataFrame = ngram.transform(df)
+    ngramDataFrame = getTimeRelatedNGrams(ngramDataFrame)
+    convertDurationsToDays_udf = f.udf(convertDurationsToDays, ArrayType(FloatType()))
+    mostCommon_udf = f.udf(mostCommon, FloatType())
+    quantifiedDf = ngramDataFrame.withColumn("predictedDays", convertDurationsToDays_udf(ngramDataFrame.timeKeywords))
+    quantifiedDf = quantifiedDf.withColumn("predictedDays", mostCommon_udf(quantifiedDf.predictedDays))
+    quantifiedDf = quantifiedDf.select('caseID', 'timeKeywords', 'predictedDays')
+    quantifiedDf.cache()
+    # evaluate
+    quantifiedDfEval = quantifiedDf.join(categorizedCsv, ngramDataFrame.caseID == categorizedCsv.caseName).select('caseId', 'duration1', 'timeKeywords', 'predictedDays')
+    quantifiedDfEval = quantifiedDfEval.filter(quantifiedDfEval.duration1 != "null").filter(f.size('timeKeywords') != 0)
+    quantifiedDfEval = quantifiedDfEval.withColumn("actualDays", convertDurationsToDays_udf(quantifiedDfEval.duration1))
+    quantifiedDfEval = quantifiedDfEval.withColumn("actualDays", quantifiedDfEval.actualDays[0])
+    quantifiedDfEval = quantifiedDfEval.withColumn("correctlyPredicted", f.col('predictedDays') == f.col('actualDays'))
+    quantifiedDfEval.select('caseId', 'predictedDays', 'actualDays', 'timeKeywords').show(200, truncate=False)
+    evaluator = RegressionEvaluator(metricName="rmse", labelCol="actualDays", predictionCol="predictedDays")
+    rmse = evaluator.evaluate(quantifiedDfEval)
+    print("Sentence duration RMSE:" + str(rmse))
+    numCorrect = quantifiedDfEval.groupBy().agg(f.sum(f.col("correctlyPredicted").cast("long"))).collect()[0][0]
+    totalCases = quantifiedDfEval.count()
+    print("numCorrect:", numCorrect)
+    print("totalCases:", totalCases)
+    pctCorrect = (numCorrect/totalCases)*100
+    print("Percentage of sentences correctly predicted: ", pctCorrect)
 
     # SPLIT BY INDIGENOUS AND NON-INDIGENOUS
     # categorizeByIndigeneity_udf = f.udf(categorizeByIndigeneity, BooleanType())
@@ -248,25 +254,25 @@ stop_words = ['the', 'of', 'to', 'and', 'a', 'in', 'that', 'is', 'for', 'was', '
 
 searchData = [("assault", ['aggravated', 'assaulted', 'domestic', 'fight', 'assault', 'assaulting', 'threats', 'bodily', 'harm', 'attacked', 'attack', 'punched', 'punch']),
               ("sexual offences", ['sexual', 'sex', 'consent', 'nonconsensual', 'consensual', 'abuse', 'abused', 'rape', 'raped', 'incest', 'molester', 'touching', 'pants', 'penis', 'clothing', 'vagina', 'breasts', 'breast', 'grope', 'groped']),
-              ("homicide", ['manslaughter', 'murder', 'death', 'weapon', 'kill', 'killing', 'deceased', 'meditated', 'premeditated', 'died', 'accidental']),
+              ("homicide", ['manslaughter', 'murder', 'death', 'dead', 'weapon', 'kill', 'killing', 'deceased', 'meditated', 'premeditated', 'died', 'accidental', 'pronounced']),
               ("terrorism", ['group', 'terrorism', 'terrorist']),
               ("drug offences", ['drug', 'drugs', 'trafficking', 'crack', 'cocaine', 'heroin', 'kilogram', 'kilograms', 'pound', 'pounds', 'ounces', 'grams', 'marijuana', 'intoxicating', 'methamphetamine', 'meth', 'lsd']),
               ("robbery", ['robbery', 'robbed', 'rob', 'stole', 'stolen', 'steal', 'stealing', 'break', 'enter', 'theft', '348', 'break', 'breaking', 'enter', 'entering']),
-              ("weapon", ['weapon', 'firearm', 'firearms', 'pistol', 'rifle', 'knife', 'stabbed', 'stabbing', 'firing', 'fired', 'shooting', 'armed']),
+              ("weapon", ['weapon', 'firearm', 'firearms', 'pistol', 'rifle', 'knife', 'knives', 'puncture', 'stab', 'stabbed', 'stabbing', 'firing', 'fired', 'shooting', 'armed']),
               ("fraud", ['forgery', 'forging', 'fraud', 'impersonation', 'cheque', 'cheques', 'sum', 'financial', 'money', 'monies', 'deprivation', 'fraudulent', 'defraud', 'defrauded', 'defrauding', 'deceits', 'deceit', 'falsehood', 'breach', 'trust', 'con', 'artist', 'forgery']),
               ("child pornography", ['child', 'pornography', 'vile', 'disgusting', 'distribution', 'repulsive', 'underage']),
-              ("mischief", ['mischief']),
+              ("mischief", ['mischief', 'mislead', 'misled']),
               ("illegal possession", ['proceeds', 'possession']),
               ("escaping lawful custody", ['escape']),
               ("criminal organization", ['gang', 'mafia', 'hells', 'angels']),
               ("uttering threats", ['utter', 'uttered', 'uttering', 'threat', 'threats']),
               ("breach of trust", ['trust']),
-              ("forcible confinement", ['confinement', 'kidnap', 'kidnapping']),
+              ("forcible confinement", ['forcible', 'confinement', 'kidnap', 'kidnapping']),
               ("regulatory offences", ['regulatory', 'municipal']),
-              ("offences relating to public or peace officer", ['obstruction']),
+              ("offences relating to public or peace officer", ['obstruction', '129', 'peace', 'officer']),
               ("attempt offences", ['attempt', 'attempted', 'commit']),
               ("driving offences", ['253', 'driving', 'highway', 'traffic', 'suspended', 'hta', 'stunt', 'plates', 'careless', 'automobile', 'motor', 'vehicle', 'operate']),
-              ("court-related offences", ['perjury', 'breaching', 'breach', 'breached', 'conditions', 'condition', 'order', 'comply', '731', '139', '145', '264', 'ltso']),
+              ("court-related offences", ['perjury', 'breaching', 'breach', 'breached', 'conditions', 'condition', 'order', 'comply', 'curfew', 'terms' '731', '139', '145', '264', 'ltso']),
               ("tax offences", ['evading', 'evade', 'tax', 'income', 'taxation', 'hiding'])]
 
 timeRelatedWords = ['day', 'days', 'month', 'months', 'year', 'years']
@@ -276,7 +282,7 @@ ageRelatedWords = ['old', 'age', 'aged', 'young', 'whe`n', 'victim', 'accused', 
 # sentenceRelatedWords = ['imprisonment', 'prison', 'sentenced', 'sentence', 'probation', 'incarceration', 'intermittent',
 #                         'concurrent', 'reduced', 'incarceration', 'correctional', 'jail', 'supervised', 'custodial']
 # only look at imprisonment
-sentenceRelatedWords = ['imprisonment', 'prison', 'sentenced', 'sentence', 'incarceration', 'incarceration', 'correctional', 'custodial']
+sentenceRelatedWords = ['imprisonment', 'prison', 'sentenced', 'sentence', 'incarceration', 'incarceration', 'correctional', 'custodial', 'custody', 'impose']
 
 indigenousRelatedWords = ['indigenous', 'aboriginal', 'gladue', 'ipeelee']
 
@@ -324,6 +330,25 @@ def extractOffenseKeywords(df):
     offenseKeywords_udf = f.udf(offenseKeywords, ArrayType(StringType()))
     df = df.withColumn("offenseKeywords", offenseKeywords_udf(df.filteredFullText))
     return df
+
+
+def filterExtraOffences(listOffences, listDistances):
+    if len(listOffences) < 2:
+        return listOffences
+    else:
+        newListOffences = []
+        newListOffences.append(listOffences[0])
+        firstDistance = listDistances[0]
+        for index, distance in enumerate(listDistances[1:], 1):
+            if len(newListOffences) >= 2:
+                break
+            else:
+                if distance - firstDistance < 0.04:
+                    newListOffences.append(listOffences[index])
+                else:
+                    break
+        return newListOffences
+
 
 
 def timeKeywords(textArray):
