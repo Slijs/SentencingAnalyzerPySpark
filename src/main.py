@@ -1,9 +1,12 @@
 from pyspark import SQLContext
 from pyspark.ml import Pipeline
 from pyspark.ml.classification import DecisionTreeClassifier
-from pyspark.ml.evaluation import RegressionEvaluator
+from pyspark.ml.clustering import KMeans
+from pyspark.ml.evaluation import RegressionEvaluator, ClusteringEvaluator
 from pyspark.ml.feature import StopWordsRemover, HashingTF, IDF, Tokenizer, NGram, CountVectorizer, MinHashLSH, \
     Word2Vec, StringIndexer, VectorIndexer
+from pyspark.ml.regression import DecisionTreeRegressor, LinearRegression, RandomForestRegressor, GBTRegressor, \
+    IsotonicRegression, GeneralizedLinearRegression
 from pyspark.sql import SparkSession
 import pyspark.sql.functions as f
 from pyspark.sql.types import ArrayType, StringType, FloatType, BooleanType
@@ -60,42 +63,177 @@ def main():
     distanceDfEval = distanceDfEval.filter(distanceDfEval.offenseType[0] != "N/A").filter(distanceDfEval.offenseType[0] != "multiple party sentence")
     calcuateDifferenceInPredictedVsActualOffences_udf = f.udf(calcuateDifferenceInPredictedVsActualOffences, FloatType())
     distanceDfEval = distanceDfEval.withColumn("error", calcuateDifferenceInPredictedVsActualOffences_udf(distanceDfEval.predictedOffences, distanceDfEval.offenseType))
+    calcuateDifferenceInPredictedVsActualOffencesPercentage_udf = f.udf(calcuateDifferenceInPredictedVsActualOffencesPercentage, FloatType())
+    distanceDfEval = distanceDfEval.withColumn("pctCorrect", calcuateDifferenceInPredictedVsActualOffencesPercentage_udf(distanceDfEval.predictedOffences, distanceDfEval.offenseType))
+    distanceDfEval.select('caseID', 'predictedOffences', 'offenseType', 'JaccardDistances', 'error', 'pctCorrect').show(200, truncate=False)
     rmse = (distanceDfEval.groupBy().agg(f.sum('error')).collect()[0][0]/distanceDfEval.count())**(1.0/2)
     print("Offense category RMSE:", rmse)
+    pctCorrectOffense = (distanceDfEval.groupBy().agg(f.sum('pctCorrect')).collect()[0][0] / distanceDfEval.count()) * 100
+    print("Percentage of offenses correctly categorized: ", pctCorrectOffense)
 
     # QUANTIZATION OF SENTENCE DURATION
     # compute n-grams
-    ngram = NGram(n=3, inputCol="filteredFullText", outputCol="ngrams")
-    ngramDataFrame = ngram.transform(df)
-    ngramDataFrame = getTimeRelatedNGrams(ngramDataFrame)
-    convertDurationsToDays_udf = f.udf(convertDurationsToDays, ArrayType(FloatType()))
-    mostCommon_udf = f.udf(mostCommon, FloatType())
-    quantifiedDf = ngramDataFrame.withColumn("predictedDays", convertDurationsToDays_udf(ngramDataFrame.timeKeywords))
-    quantifiedDf = quantifiedDf.withColumn("predictedDays", mostCommon_udf(quantifiedDf.predictedDays))
-    quantifiedDf = quantifiedDf.select('caseID', 'timeKeywords', 'predictedDays')
-    quantifiedDf.cache()
-    # evaluate
-    quantifiedDfEval = quantifiedDf.join(categorizedCsv, ngramDataFrame.caseID == categorizedCsv.caseName).select('caseId', 'duration1', 'timeKeywords', 'predictedDays')
-    quantifiedDfEval = quantifiedDfEval.filter(quantifiedDfEval.duration1 != "null").filter(f.size('timeKeywords') != 0)
-    quantifiedDfEval = quantifiedDfEval.withColumn("actualDays", convertDurationsToDays_udf(quantifiedDfEval.duration1))
-    quantifiedDfEval = quantifiedDfEval.withColumn("actualDays", quantifiedDfEval.actualDays[0])
-    evaluator = RegressionEvaluator(metricName="rmse", labelCol="actualDays", predictionCol="predictedDays")
-    rmse = evaluator.evaluate(quantifiedDfEval)
-    print("Sentence duration RMSE:" + str(rmse))
+    # ngram = NGram(n=3, inputCol="filteredFullText", outputCol="ngrams")
+    # ngramDataFrame = ngram.transform(df)
+    # ngramDataFrame = getTimeRelatedNGrams(ngramDataFrame)
+    # convertDurationsToDays_udf = f.udf(convertDurationsToDays, ArrayType(FloatType()))
+    # mostCommon_udf = f.udf(mostCommon, FloatType())
+    # quantifiedDf = ngramDataFrame.withColumn("predictedDays", convertDurationsToDays_udf(ngramDataFrame.timeKeywords))
+    # quantifiedDf = quantifiedDf.withColumn("predictedDays", mostCommon_udf(quantifiedDf.predictedDays))
+    # quantifiedDf = quantifiedDf.select('caseID', 'timeKeywords', 'predictedDays')
+    # quantifiedDf.cache()
+    # # evaluate
+    # quantifiedDfEval = quantifiedDf.join(categorizedCsv, ngramDataFrame.caseID == categorizedCsv.caseName).select('caseId', 'duration1', 'timeKeywords', 'predictedDays')
+    # quantifiedDfEval = quantifiedDfEval.filter(quantifiedDfEval.duration1 != "null").filter(f.size('timeKeywords') != 0)
+    # quantifiedDfEval = quantifiedDfEval.withColumn("actualDays", convertDurationsToDays_udf(quantifiedDfEval.duration1))
+    # quantifiedDfEval = quantifiedDfEval.withColumn("actualDays", quantifiedDfEval.actualDays[0])
+    # quantifiedDfEval = quantifiedDfEval.withColumn("correctlyPredicted", f.col('predictedDays') == f.col('actualDays'))
+    # evaluator = RegressionEvaluator(metricName="rmse", labelCol="actualDays", predictionCol="predictedDays")
+    # rmse = evaluator.evaluate(quantifiedDfEval)
+    # print("Sentence duration RMSE:" + str(rmse))
+    # numCorrect = quantifiedDfEval.groupBy().agg(f.sum(f.col("correctlyPredicted").cast("long"))).collect()[0][0]
+    # totalCases = quantifiedDfEval.count()
+    # print("numCorrect:", numCorrect)
+    # print("totalCases:", totalCases)
+    # pctCorrect = (numCorrect/totalCases)*100
+    # print("Percentage of sentences correctly predicted: ", pctCorrect)
 
     # SPLIT BY INDIGENOUS AND NON-INDIGENOUS
-    categorizeByIndigeneity_udf = f.udf(categorizeByIndigeneity, BooleanType())
-    ethnicityDf = df.withColumn("isIndigenous", categorizeByIndigeneity_udf(df.filteredFullText)).select('caseID', 'isIndigenous')
-    ethnicityDf.cache()
-    ethnicityDf.show()
+    # categorizeByIndigeneity_udf = f.udf(categorizeByIndigeneity, BooleanType())
+    # ethnicityDf = df.withColumn("isIndigenous", categorizeByIndigeneity_udf(df.filteredFullText)).select('caseID', 'isIndigenous')
+    # ethnicityDf.cache()
+    # ethnicityDf.show()
 
     # CLUSTER
     # combine all previous steps into single df
-    fullyCategorizedDf = distanceDf.join(quantifiedDf.join(ethnicityDf, 'caseID'), 'caseID').select('caseID', 'predictedOffences', 'predictedDays', 'isIndigenous')
-    fullyCategorizedDf.cache()
-    fullyCategorizedDf.show(200, truncate=False)
-
-
+    # fullyCategorizedDf = distanceDf.join(quantifiedDf.join(ethnicityDf, 'caseID'), 'caseID')\
+    #     .select('caseID', 'predictedOffences', 'predictedDays', 'isIndigenous')\
+    #     .filter(f.col('predictedDays') != 0.0)
+    # fullyCategorizedDf.cache()
+    # # fullyCategorizedDf.show(200, truncate=False)
+    #
+    # fullyCategorizedDfHashingTF = HashingTF(inputCol="predictedOffences", outputCol="predictedOffencesVector", numFeatures=8)
+    # fullyCategorizedDfFeaturized = fullyCategorizedDfHashingTF.transform(fullyCategorizedDf)
+    # # fullyCategorizedDfFeaturized.show(200, truncate=False)
+    #
+    # # Split the data into training and test sets (30% held out for testing)
+    # (trainingData, testData) = fullyCategorizedDfFeaturized.randomSplit([0.7, 0.3], seed=1234)
+    #
+    # # LINEAR REGRESSION
+    # lr = LinearRegression(featuresCol="predictedOffencesVector", labelCol="predictedDays")
+    #
+    # # Fit the model
+    # lrModel = lr.fit(trainingData)
+    # predictions = lrModel.transform(testData)
+    # predictions.show()
+    #
+    # # Print the coefficients and intercept for linear regression
+    # # print("Coefficients: %s" % str(lrModel.coefficients))
+    # # print("Intercept: %s" % str(lrModel.intercept))
+    #
+    # # Summarize the model over the training set and print out some metrics
+    # trainingSummary = lrModel.summary
+    # # print("numIterations: %d" % trainingSummary.totalIterations)
+    # # print("objectiveHistory: %s" % str(trainingSummary.objectiveHistory))
+    # # trainingSummary.residuals.show()
+    # print("RMSE of linear regression: %f" % trainingSummary.rootMeanSquaredError)
+    # # print("r2: %f" % trainingSummary.r2)
+    #
+    # # GENERALIZED LINEAR REGRESSION (GAMMA DISTRIBUTION)
+    # glr = GeneralizedLinearRegression(featuresCol="predictedOffencesVector", labelCol="predictedDays", family="gaussian", link="identity", linkPredictionCol="p")
+    # # Train model.  This also runs the indexer.
+    # model = glr.fit(trainingData)
+    #
+    # # Make predictions.
+    # predictions = model.transform(testData)
+    #
+    # # Select example rows to display.
+    # predictions.show(200)
+    #
+    # evaluator = RegressionEvaluator(labelCol="predictedDays", predictionCol="prediction", metricName="rmse")
+    # rmse = evaluator.evaluate(predictions)
+    # print("Root Mean Squared Error (RMSE) of generalized linear regression (gaussian distribution) on test data = %g" % rmse)
+    #
+    # # DECISION TREE REGRESSION
+    # # Train a DecisionTree model.
+    # dt = DecisionTreeRegressor(featuresCol="predictedOffencesVector", labelCol="predictedDays")
+    #
+    # # Train model.  This also runs the indexer.
+    # model = dt.fit(trainingData)
+    #
+    # # Make predictions.
+    # predictions = model.transform(testData)
+    #
+    # # Select example rows to display.
+    # predictions.show(200)
+    #
+    # evaluator = RegressionEvaluator(labelCol="predictedDays", predictionCol="prediction", metricName="rmse")
+    # rmse = evaluator.evaluate(predictions)
+    # print("Root Mean Squared Error (RMSE) of decision tree on test data = %g" % rmse)
+    #
+    # # RANDOM FOREST REGRESSION
+    # rf = RandomForestRegressor(featuresCol="predictedOffencesVector", labelCol="predictedDays", numTrees=30)
+    # # Train model.  This also runs the indexer.
+    # model = rf.fit(trainingData)
+    #
+    # # Make predictions.
+    # predictions = model.transform(testData)
+    #
+    # # Select example rows to display.
+    # predictions.show(200)
+    #
+    # evaluator = RegressionEvaluator(labelCol="predictedDays", predictionCol="prediction", metricName="rmse")
+    # rmse = evaluator.evaluate(predictions)
+    # print("Root Mean Squared Error (RMSE) of random forest on test data = %g" % rmse)
+    #
+    # # GRADIENT BOOSTED TREE REGRESSION
+    #
+    # gbt = GBTRegressor(featuresCol="predictedOffencesVector", labelCol="predictedDays", maxIter=10)
+    # # Train model.  This also runs the indexer.
+    # model = gbt.fit(trainingData)
+    #
+    # # Make predictions.
+    # predictions = model.transform(testData)
+    #
+    # # Select example rows to display.
+    # predictions.show(200)
+    #
+    # evaluator = RegressionEvaluator(labelCol="predictedDays", predictionCol="prediction", metricName="rmse")
+    # rmse = evaluator.evaluate(predictions)
+    # print("Root Mean Squared Error (RMSE) of gradient boosted tree on test data = %g" % rmse)
+    #
+    # # ISOTONIC REGRESSION - widely varying sentences for groups of offenses make this a bad choice
+    # iso = IsotonicRegression(featuresCol="predictedOffencesVector", labelCol="predictedDays")
+    # model = iso.fit(trainingData)
+    # # Make predictions.
+    # predictions = model.transform(testData)
+    #
+    # # Select example rows to display.
+    # predictions.show(200)
+    #
+    # evaluator = RegressionEvaluator(labelCol="predictedDays", predictionCol="prediction", metricName="rmse")
+    # rmse = evaluator.evaluate(predictions)
+    # print("Root Mean Squared Error (RMSE) of isotonic on test data = %g" % rmse)
+    #
+    # # K-MEANS
+    # # Trains a k-means model.
+    # kmeans = KMeans(featuresCol="predictedOffencesVector", k=10, seed=1234)
+    # model = kmeans.fit(trainingData)
+    #
+    # # Make predictions
+    # predictions = model.transform(testData)
+    #
+    # # Evaluate clustering by computing Silhouette score
+    # evaluator = ClusteringEvaluator(featuresCol="predictedOffencesVector")
+    #
+    # silhouette = evaluator.evaluate(predictions)
+    # print("Silhouette with squared euclidean distance = " + str(silhouette))
+    #
+    # # Shows the result.
+    # centers = model.clusterCenters()
+    # print("Cluster Centers: ")
+    # for center in centers:
+    #     print(center)
     # VISUALIZE RESULTS
 
 
@@ -138,7 +276,7 @@ ageRelatedWords = ['old', 'age', 'aged', 'young', 'whe`n', 'victim', 'accused', 
 # sentenceRelatedWords = ['imprisonment', 'prison', 'sentenced', 'sentence', 'probation', 'incarceration', 'intermittent',
 #                         'concurrent', 'reduced', 'incarceration', 'correctional', 'jail', 'supervised', 'custodial']
 # only look at imprisonment
-sentenceRelatedWords = ['imprisonment', 'prison', 'sentenced', 'sentence', 'incarceration', 'incarceration', 'correctional', 'jail', 'supervised', 'custodial']
+sentenceRelatedWords = ['imprisonment', 'prison', 'sentenced', 'sentence', 'incarceration', 'incarceration', 'correctional', 'custodial']
 
 indigenousRelatedWords = ['indigenous', 'aboriginal', 'gladue', 'ipeelee']
 
@@ -194,7 +332,7 @@ def timeKeywords(textArray):
         words = ngram.split(' ')
         quantityFound = False
         for word in words:
-            if word.isdigit():
+            if word.isdigit() and word != "0":
                 quantityFound = True
         if not quantityFound:
             continue
@@ -257,6 +395,8 @@ def convertDurationsToDays(text):
 def mostCommon(listOfDurations):
     if len(listOfDurations) == 0:
         return 0.0
+    # sort to return the max sentence in case of ties (to better approximate concurrent sentences)
+    # return max(sorted(set(listOfDurations), reverse=True), key=listOfDurations.count)
     return max(set(listOfDurations), key=listOfDurations.count)
 
 
@@ -286,6 +426,23 @@ def calcuateDifferenceInPredictedVsActualOffences(predictedArray, actualArray):
                 break
     return ((found - len(longer))/len(longer))**2
 
+
+def calcuateDifferenceInPredictedVsActualOffencesPercentage(predictedArray, actualArray):
+    longer = []
+    shorter = []
+    if len(predictedArray) >= len(actualArray):
+        longer = predictedArray
+        shorter = actualArray
+    else:
+        longer = actualArray
+        shorter = predictedArray
+    found = 0
+    for offenceL in longer:
+        for offenceS in shorter:
+            if offenceL == offenceS:
+                found += 1
+                break
+    return found/len(longer)
 
 # def findOffenseCategory(hash):
 #     model.approxNearestNeighbors(dfToSearch, hash, 2).show()
