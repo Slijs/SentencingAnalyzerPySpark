@@ -1,15 +1,10 @@
-from pyspark import SQLContext
-from pyspark.ml import Pipeline
-from pyspark.ml.classification import DecisionTreeClassifier
 from pyspark.ml.clustering import KMeans
 from pyspark.ml.evaluation import RegressionEvaluator, ClusteringEvaluator
-from pyspark.ml.feature import StopWordsRemover, HashingTF, IDF, Tokenizer, NGram, CountVectorizer, MinHashLSH, \
-    Word2Vec, StringIndexer, VectorIndexer, OneHotEncoderEstimator
-from pyspark.ml.regression import DecisionTreeRegressor, LinearRegression, RandomForestRegressor, GBTRegressor, \
-    IsotonicRegression, GeneralizedLinearRegression
+from pyspark.ml.feature import StopWordsRemover, HashingTF, IDF, NGram, MinHashLSH
+from pyspark.ml.regression import DecisionTreeRegressor, LinearRegression, RandomForestRegressor, GeneralizedLinearRegression
 from pyspark.sql import SparkSession
 import pyspark.sql.functions as f
-from pyspark.sql.types import ArrayType, StringType, FloatType, BooleanType, IntegerType
+from pyspark.sql.types import ArrayType, StringType, FloatType, IntegerType
 import re
 import matplotlib.pyplot as plt
 import numpy as np
@@ -127,18 +122,6 @@ def main():
     print("Total cases fully classified: ", fullyCategorizedDf.count())
     # fullyCategorizedDf.show(200, truncate=False)
 
-    # fullyCategorizedDfHashingTF = HashingTF(inputCol="predictedOffences", outputCol="predictedOffencesVector", numFeatures=22)
-    # fullyCategorizedDfFeaturized = fullyCategorizedDfHashingTF.transform(fullyCategorizedDf)
-    # fullyCategorizedDfFeaturized.show(200, truncate=False)
-
-    # fit a CountVectorizerModel from the corpus.
-    # cv = CountVectorizer(inputCol="predictedOffences", outputCol="predictedOffencesVector", vocabSize=22, minDF=0.0)
-    #
-    # model = cv.fit(fullyCategorizedDf)
-    #
-    # result = model.transform(fullyCategorizedDf)
-    # result.show(truncate=False)
-
     # custom vectorizer
     vectorizePredictedOffences_udf = f.udf(vectorizePredictedOffences, ArrayType(IntegerType()))
     list_to_vector_udf = f.udf(lambda l: Vectors.dense(l), VectorUDT())
@@ -147,53 +130,48 @@ def main():
         .withColumn('predictedOffencesVector', list_to_vector_udf('predictedOffencesVector'))
     # fullyCategorizedDfFeaturized.show(truncate=False)
 
-    # encoder = OneHotEncoderEstimator(inputCols=["predictedOffencesIndex", "isIndigenous"], outputCols=["predictedOffencesVector", "isIndigenousVector"])
-    # model = encoder.fit(fullyCategorizedDf)
-    # fullyCategorizedDfFeaturized = model.transform(fullyCategorizedDf)
-    # fullyCategorizedDfFeaturized.show(truncate=False)
-
     # Split the data into indigenous and non-indigenous sets (30% held out for testing)
     indigenousOffendersDf = fullyCategorizedDfFeaturized.filter(fullyCategorizedDfFeaturized.isIndigenous == 1)
     print("Number of cases involving indigenous offenders:", indigenousOffendersDf.count())
     nonIndigenousOffendersDf = fullyCategorizedDfFeaturized.filter(fullyCategorizedDfFeaturized.isIndigenous == 0)
     print("Number of cases involving non-indigenous offenders:", nonIndigenousOffendersDf.count())
 
-    # meanByOffenceTypeIndigenousOffendersRows = indigenousOffendersDf\
-    #     .groupBy('predictedOffencesIndex')\
-    #     .agg({'predictedDays': 'mean'}).collect()
-    # print("\nMean of offences for indigenous offenders:")
-    # meanByOffenceTypeIndigenousOffenders = []
-    # for index, meanOfOffence in enumerate(meanByOffenceTypeIndigenousOffendersRows):
-    #     type = searchData[meanOfOffence[0]][0]
-    #     mean = meanOfOffence[1]
-    #     meanByOffenceTypeIndigenousOffenders.append((type, mean))
-    #     print(searchData[meanOfOffence[0]][0], meanOfOffence[1])
-    #
-    # meanByOffenceTypeNonIndigenousOffendersRows = nonIndigenousOffendersDf\
-    #     .groupBy('predictedOffencesIndex')\
-    #     .agg({'predictedDays': 'mean'}).collect()
-    # meanByOffenceTypeNonIndigenousOffenders = []
-    # for index, meanOfOffence in enumerate(meanByOffenceTypeNonIndigenousOffendersRows):
-    #     type = searchData[meanOfOffence[0]][0]
-    #     mean = meanOfOffence[1]
-    #     meanByOffenceTypeNonIndigenousOffenders.append((type, mean))
-    #     print(searchData[meanOfOffence[0]][0], meanOfOffence[1])
-    #
-    # listOffences = fullyCategorizedDfFeaturized.select(fullyCategorizedDfFeaturized.predictedOffences[0]).collect()
-    # x = []
-    # for offence in listOffences:
-    #     x.append(offence[0])
-    # y = fullyCategorizedDfFeaturized.select('predictedDays').collect()
-    # plt.figure(figsize=(8, 10))
-    # plt.scatter(x, y, label="Case")
-    # plt.scatter([x[0] for x in meanByOffenceTypeNonIndigenousOffenders], [x[1] for x in meanByOffenceTypeNonIndigenousOffenders], label="Mean (non-Indigenous)", s=90, c="cyan")
-    # plt.scatter([x[0] for x in meanByOffenceTypeIndigenousOffenders], [x[1] for x in meanByOffenceTypeIndigenousOffenders], label="Mean (Indigenous)", s=90, c="magenta")
-    # plt.xticks(rotation=-90)
-    # plt.ylabel("Days incarcerated")
-    # plt.xlabel("Offense type")
-    # plt.legend()
-    # plt.title("Estimated cases and sentence durations from full text analysis")
-    # plt.show()
+    meanByOffenceTypeIndigenousOffendersRows = indigenousOffendersDf\
+        .groupBy('predictedOffencesIndex')\
+        .agg({'predictedDays': 'mean'}).collect()
+    print("\nMean of offences for indigenous offenders:")
+    meanByOffenceTypeIndigenousOffenders = []
+    for index, meanOfOffence in enumerate(meanByOffenceTypeIndigenousOffendersRows):
+        type = searchData[meanOfOffence[0]][0]
+        mean = meanOfOffence[1]
+        meanByOffenceTypeIndigenousOffenders.append((type, mean))
+        print(searchData[meanOfOffence[0]][0], meanOfOffence[1])
+
+    meanByOffenceTypeNonIndigenousOffendersRows = nonIndigenousOffendersDf\
+        .groupBy('predictedOffencesIndex')\
+        .agg({'predictedDays': 'mean'}).collect()
+    meanByOffenceTypeNonIndigenousOffenders = []
+    for index, meanOfOffence in enumerate(meanByOffenceTypeNonIndigenousOffendersRows):
+        type = searchData[meanOfOffence[0]][0]
+        mean = meanOfOffence[1]
+        meanByOffenceTypeNonIndigenousOffenders.append((type, mean))
+        print(searchData[meanOfOffence[0]][0], meanOfOffence[1])
+
+    listOffences = fullyCategorizedDfFeaturized.select(fullyCategorizedDfFeaturized.predictedOffences[0]).collect()
+    x = []
+    for offence in listOffences:
+        x.append(offence[0])
+    y = fullyCategorizedDfFeaturized.select('predictedDays').collect()
+    plt.figure(figsize=(8, 10))
+    plt.scatter(x, y, label="Case")
+    plt.scatter([x[0] for x in meanByOffenceTypeNonIndigenousOffenders], [x[1] for x in meanByOffenceTypeNonIndigenousOffenders], label="Mean (non-Indigenous)", s=90, c="cyan")
+    plt.scatter([x[0] for x in meanByOffenceTypeIndigenousOffenders], [x[1] for x in meanByOffenceTypeIndigenousOffenders], label="Mean (Indigenous)", s=90, c="magenta")
+    plt.xticks(rotation=-90)
+    plt.ylabel("Days incarcerated")
+    plt.xlabel("Offense type")
+    plt.legend()
+    plt.title("Estimated cases and sentence durations from full text analysis")
+    plt.show()
 
     # VISUALIZE CATEGORIZED DATA
 
@@ -313,65 +291,65 @@ def main():
     # print("Root Mean Squared Error (RMSE) of decision tree on test data = %g" % rmse)
     #
     # # RANDOM FOREST REGRESSION
-    # rf = RandomForestRegressor(featuresCol="predictedOffencesVector", labelCol="predictedDays", numTrees=30)
-    # modelNonIndigenous = rf.fit(nonIndigenousOffendersDf)
-    # # Make predictions.
-    # predictionsNonIndigenous = modelNonIndigenous.transform(nonIndigenousOffendersDf)
-    # # Select example rows to display.
-    # # predictions.show()
-    # evaluator = RegressionEvaluator(labelCol="predictedDays", predictionCol="prediction", metricName="rmse")
-    # rmse = evaluator.evaluate(predictionsNonIndigenous)
-    # print("RMSE of generalized linear regression (gaussian distribution) on non-indigenous data = %g" % rmse)
-    #
-    # meanByOffenceTypeNonIndigenousOffendersRows = predictionsNonIndigenous\
-    #     .groupBy('predictedOffencesIndex')\
-    #     .agg({'prediction': 'mean'}).collect()
-    # meanByOffenceTypeNonIndigenousOffenders = []
-    # for index, meanOfOffence in enumerate(meanByOffenceTypeNonIndigenousOffendersRows):
-    #     type = searchData[meanOfOffence[0]][0]
-    #     mean = meanOfOffence[1]
-    #     meanByOffenceTypeNonIndigenousOffenders.append((type, mean))
-    #     print(searchData[meanOfOffence[0]][0], meanOfOffence[1])
-    #
-    # # Train model.  This also runs the indexer.
-    # modelIndigenous = rf.fit(indigenousOffendersDf)
-    # # Make predictions.
-    # predictionsIndigenous = modelIndigenous.transform(indigenousOffendersDf)
-    # # Select example rows to display.
-    # predictionsIndigenous.show()
-    # rmse = evaluator.evaluate(predictionsIndigenous)
-    # print("RMSE of generalized linear regression (gaussian distribution) on indigenous data = %g" % rmse)
-    #
-    # meanByOffenceTypeIndigenousOffendersRows = predictionsIndigenous\
-    #     .groupBy('predictedOffencesIndex')\
-    #     .agg({'prediction': 'mean'}).collect()
-    # print("\nMean of offences for indigenous offenders:")
-    # meanByOffenceTypeIndigenousOffenders = []
-    # for index, meanOfOffence in enumerate(meanByOffenceTypeIndigenousOffendersRows):
-    #     type = searchData[meanOfOffence[0]][0]
-    #     mean = meanOfOffence[1]
-    #     meanByOffenceTypeIndigenousOffenders.append((type, mean))
-    #     print(searchData[meanOfOffence[0]][0], meanOfOffence[1])
-    # meanByOffenceTypeNonIndigenousOffendersDict = dict(meanByOffenceTypeNonIndigenousOffenders)
-    # meanByOffenceTypeIndigenousOffendersDict = dict(meanByOffenceTypeIndigenousOffenders)
-    # for offenceType in searchData:
-    #     if offenceType[0] not in meanByOffenceTypeIndigenousOffendersDict:
-    #         meanByOffenceTypeIndigenousOffenders.append((offenceType[0], 0))
-    #     if offenceType[0] not in meanByOffenceTypeNonIndigenousOffendersDict:
-    #         meanByOffenceTypeNonIndigenousOffenders.append((offenceType[0], 0))
-    #
-    # numCategories = len(meanByOffenceTypeNonIndigenousOffenders)
-    # ind = np.arange(numCategories)
-    # plotBarWidth = 0.3
-    # plt.figure(figsize=(8, 10))
-    # plt.bar(ind, [x[1] for x in meanByOffenceTypeIndigenousOffenders], plotBarWidth, label="Mean (Indigenous)", color="magenta")
-    # plt.bar(ind+plotBarWidth, [x[1] for x in meanByOffenceTypeNonIndigenousOffenders], plotBarWidth, label="Mean (non-Indigenous)", color="cyan")
-    # plt.xticks(ind + plotBarWidth / 2, [x[0] for x in meanByOffenceTypeNonIndigenousOffenders], rotation=-90)
-    # plt.ylabel("Days incarcerated")
-    # plt.xlabel("Offense type")
-    # plt.title("Random forest regression predictions")
-    # plt.legend()
-    # plt.show()
+    rf = RandomForestRegressor(featuresCol="predictedOffencesVector", labelCol="predictedDays", numTrees=30)
+    modelNonIndigenous = rf.fit(nonIndigenousOffendersDf)
+    # Make predictions.
+    predictionsNonIndigenous = modelNonIndigenous.transform(nonIndigenousOffendersDf)
+    # Select example rows to display.
+    # predictions.show()
+    evaluator = RegressionEvaluator(labelCol="predictedDays", predictionCol="prediction", metricName="rmse")
+    rmse = evaluator.evaluate(predictionsNonIndigenous)
+    print("RMSE of random forest on non-indigenous data = %g" % rmse)
+
+    meanByOffenceTypeNonIndigenousOffendersRows = predictionsNonIndigenous\
+        .groupBy('predictedOffencesIndex')\
+        .agg({'prediction': 'mean'}).collect()
+    meanByOffenceTypeNonIndigenousOffenders = []
+    for index, meanOfOffence in enumerate(meanByOffenceTypeNonIndigenousOffendersRows):
+        type = searchData[meanOfOffence[0]][0]
+        mean = meanOfOffence[1]
+        meanByOffenceTypeNonIndigenousOffenders.append((type, mean))
+        print(searchData[meanOfOffence[0]][0], meanOfOffence[1])
+
+    # Train model.  This also runs the indexer.
+    modelIndigenous = rf.fit(indigenousOffendersDf)
+    # Make predictions.
+    predictionsIndigenous = modelIndigenous.transform(indigenousOffendersDf)
+    # Select example rows to display.
+    predictionsIndigenous.show()
+    rmse = evaluator.evaluate(predictionsIndigenous)
+    print("RMSE of random forest on indigenous data = %g" % rmse)
+
+    meanByOffenceTypeIndigenousOffendersRows = predictionsIndigenous\
+        .groupBy('predictedOffencesIndex')\
+        .agg({'prediction': 'mean'}).collect()
+    print("\nMean of offences for indigenous offenders:")
+    meanByOffenceTypeIndigenousOffenders = []
+    for index, meanOfOffence in enumerate(meanByOffenceTypeIndigenousOffendersRows):
+        type = searchData[meanOfOffence[0]][0]
+        mean = meanOfOffence[1]
+        meanByOffenceTypeIndigenousOffenders.append((type, mean))
+        print(searchData[meanOfOffence[0]][0], meanOfOffence[1])
+    meanByOffenceTypeNonIndigenousOffendersDict = dict(meanByOffenceTypeNonIndigenousOffenders)
+    meanByOffenceTypeIndigenousOffendersDict = dict(meanByOffenceTypeIndigenousOffenders)
+    for offenceType in searchData:
+        if offenceType[0] not in meanByOffenceTypeIndigenousOffendersDict:
+            meanByOffenceTypeIndigenousOffenders.append((offenceType[0], 0))
+        if offenceType[0] not in meanByOffenceTypeNonIndigenousOffendersDict:
+            meanByOffenceTypeNonIndigenousOffenders.append((offenceType[0], 0))
+
+    numCategories = len(meanByOffenceTypeNonIndigenousOffenders)
+    ind = np.arange(numCategories)
+    plotBarWidth = 0.3
+    plt.figure(figsize=(8, 10))
+    plt.bar(ind, [x[1] for x in meanByOffenceTypeIndigenousOffenders], plotBarWidth, label="Mean (Indigenous)", color="magenta")
+    plt.bar(ind+plotBarWidth, [x[1] for x in meanByOffenceTypeNonIndigenousOffenders], plotBarWidth, label="Mean (non-Indigenous)", color="cyan")
+    plt.xticks(ind + plotBarWidth / 2, [x[0] for x in meanByOffenceTypeNonIndigenousOffenders], rotation=-90)
+    plt.ylabel("Days incarcerated")
+    plt.xlabel("Offense type")
+    plt.title("Random forest regression predictions")
+    plt.legend()
+    plt.show()
 
     # # GRADIENT BOOSTED TREE REGRESSION
     #
@@ -429,20 +407,17 @@ def main():
     # max_iter = 10
     # method = EnsembleKModes(n_clusters, max_iter)
     # model = method.fit(fullyCategorizedDfFeaturized.select('predictedOffencesIndex', 'predictedDays').rdd)
-
+    #
     # print(model.clusters)
     # print(method.mean_cost)
     # predictions = method.predictions
     # datapoints = method.indexed_rdd
     # combined = datapoints.zip(predictions)
     # print(combined.take(10))
-
+    #
     # centroids = model.clusters
-
-    # model.predict(rdd).take(5)
-    # model.predict(sc.parallelize(['e', 'e', 'f', 'e', 'e', 'f', 'g', 'e', 'f', 'e'])).collect()
-
-    # VISUALIZE RESULTS
+    #
+    # #VISUALIZE RESULTS
     # x = predictions.select('isIndigenous').collect()
     # listOffences = predictions.select(predictions.predictedOffences[0]).collect()
     # x = []
