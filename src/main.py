@@ -4,15 +4,17 @@ from pyspark.ml.classification import DecisionTreeClassifier
 from pyspark.ml.clustering import KMeans
 from pyspark.ml.evaluation import RegressionEvaluator, ClusteringEvaluator
 from pyspark.ml.feature import StopWordsRemover, HashingTF, IDF, Tokenizer, NGram, CountVectorizer, MinHashLSH, \
-    Word2Vec, StringIndexer, VectorIndexer
+    Word2Vec, StringIndexer, VectorIndexer, OneHotEncoderEstimator
 from pyspark.ml.regression import DecisionTreeRegressor, LinearRegression, RandomForestRegressor, GBTRegressor, \
     IsotonicRegression, GeneralizedLinearRegression
 from pyspark.sql import SparkSession
 import pyspark.sql.functions as f
-from pyspark.sql.types import ArrayType, StringType, FloatType, BooleanType
+from pyspark.sql.types import ArrayType, StringType, FloatType, BooleanType, IntegerType
 import re
-
-
+import matplotlib.pyplot as plt
+import numpy as np
+from pyspark.ml.linalg import Vectors, VectorUDT
+from pyspark_kmodes import *
 
 
 def main():
@@ -21,8 +23,11 @@ def main():
         .getOrCreate()
 
     # main df
-    cases = sc.read.json("../data/sentencingCases2.jsonl")
-    df = cleanDf(cases)
+    cases = sc.read.json("../data/sentencingCases.jsonl")
+    trainingCases = sc.read.json("../data/training.jsonl")
+    df = cases.union(trainingCases)
+    # CHANGE TO ONLY TRAINING CASES FOR EVALUATING METRICS OF OFFENSE TYPE CATEGORIZATION AND SENTENCE DURATION ESTIMATION
+    df = cleanDf(df)
     # df.filter(f.col('caseID') == "2010oncj76").show(200, truncate=False)
 
     # read categorized csv
@@ -35,46 +40,48 @@ def main():
     dfSearch = sc.createDataFrame(searchData, ["term", "offenseKeywords"])
 
     # CLASSIFICATION OF OFFENSE
-    # hashingTF = HashingTF(inputCol="offenseKeywords", outputCol="rawFeatures", numFeatures=1000)
-    # result = hashingTF.transform(df)
-    # resultSearch = hashingTF.transform(dfSearch)
-    #
-    # idf = IDF(inputCol="rawFeatures", outputCol="features")
-    # idfModel = idf.fit(result)
-    # rescaledData = idfModel.transform(result).filter(f.size('offenseKeywords') > 0)
-    # idfModelSearch = idf.fit(resultSearch)
-    # rescaledDataSearch = idfModelSearch.transform(resultSearch)
-    #
-    # mh = MinHashLSH(inputCol="features", outputCol="hashes", seed=12345, numHashTables=20)
-    # modelMH = mh.fit(rescaledData)
-    # transformedData = modelMH.transform(rescaledData)
-    #
-    # modelMHSearch = mh.fit(rescaledDataSearch)
-    # transformedDataSearch = modelMH.transform(rescaledDataSearch)
-    #
-    # categorizedDf = modelMHSearch.approxSimilarityJoin(transformedDataSearch, transformedData, 0.98, distCol="JaccardDistance")
-    # distanceDf = categorizedDf.select([f.col('datasetA.term')] + [f.col('datasetB.caseID')] + [f.col("JaccardDistance")]) \
-    #     .orderBy('caseID', 'JaccardDistance')
-    # distanceDf = distanceDf.groupBy('caseID').agg(f.collect_list('term').alias('predictedOffences'), f.collect_list('JaccardDistance').alias('JaccardDistances'))
-    # filterExtraOffences_udf = f.udf(filterExtraOffences, ArrayType(StringType()))
-    # distanceDf = distanceDf.withColumn("predictedOffences", filterExtraOffences_udf('predictedOffences', 'JaccardDistances')).select('caseID', 'predictedOffences')
-    # distanceDf.cache()
+    hashingTF = HashingTF(inputCol="offenseKeywords", outputCol="rawFeatures", numFeatures=1000)
+    result = hashingTF.transform(df)
+    resultSearch = hashingTF.transform(dfSearch)
+
+    idf = IDF(inputCol="rawFeatures", outputCol="features")
+    idfModel = idf.fit(result)
+    rescaledData = idfModel.transform(result).filter(f.size('offenseKeywords') > 0)
+    idfModelSearch = idf.fit(resultSearch)
+    rescaledDataSearch = idfModelSearch.transform(resultSearch)
+
+    mh = MinHashLSH(inputCol="features", outputCol="hashes", seed=12345, numHashTables=20)
+    modelMH = mh.fit(rescaledData)
+    transformedData = modelMH.transform(rescaledData)
+
+    modelMHSearch = mh.fit(rescaledDataSearch)
+    transformedDataSearch = modelMH.transform(rescaledDataSearch)
+
+    categorizedDf = modelMHSearch.approxSimilarityJoin(transformedDataSearch, transformedData, 0.98, distCol="JaccardDistance")
+    distanceDf = categorizedDf.select([f.col('datasetA.term')] + [f.col('datasetB.caseID')] + [f.col("JaccardDistance")]) \
+        .orderBy('caseID', 'JaccardDistance')
+    distanceDf = distanceDf.groupBy('caseID').agg(f.collect_list('term').alias('predictedOffences'), f.collect_list('JaccardDistance').alias('JaccardDistances'))
+    filterExtraOffences_udf = f.udf(filterExtraOffences, ArrayType(StringType()))
+    distanceDf = distanceDf.withColumn("predictedOffences", filterExtraOffences_udf('predictedOffences', 'JaccardDistances')).select('caseID', 'predictedOffences')
+    assignOffenceNumericalCategory_udf = f.udf(assignOffenceNumericalCategory, IntegerType())
+    distanceDf = distanceDf.withColumn("predictedOffencesIndex", assignOffenceNumericalCategory_udf('predictedOffences'))
+    distanceDf.cache()
     # distanceDf.show(200)
-    #
-    # # EVALUATE CATEGORIZATION AGAINST MANUAL CATEGORIZATION
-    # distanceDfEval = distanceDf.join(categorizedCsv, distanceDf.caseID == categorizedCsv.caseName)
-    # distanceDfEval = distanceDfEval.filter(distanceDfEval.offenseType[0] != "N/A").filter(distanceDfEval.offenseType[0] != "multiple party sentence")
-    # calcuateDifferenceInPredictedVsActualOffences_udf = f.udf(calcuateDifferenceInPredictedVsActualOffences, FloatType())
-    # distanceDfEval = distanceDfEval.withColumn("error", calcuateDifferenceInPredictedVsActualOffences_udf(distanceDfEval.predictedOffences, distanceDfEval.offenseType))
-    # calcuateDifferenceInPredictedVsActualOffencesPercentage_udf = f.udf(calcuateDifferenceInPredictedVsActualOffencesPercentage, FloatType())
-    # distanceDfEval = distanceDfEval.withColumn("pctCorrect", calcuateDifferenceInPredictedVsActualOffencesPercentage_udf(distanceDfEval.predictedOffences, distanceDfEval.offenseType))
+
+    # EVALUATE CATEGORIZATION AGAINST MANUAL CATEGORIZATION
+    distanceDfEval = distanceDf.join(categorizedCsv, distanceDf.caseID == categorizedCsv.caseName)
+    distanceDfEval = distanceDfEval.filter(distanceDfEval.offenseType[0] != "N/A").filter(distanceDfEval.offenseType[0] != "multiple party sentence")
+    calcuateDifferenceInPredictedVsActualOffences_udf = f.udf(calcuateDifferenceInPredictedVsActualOffences, FloatType())
+    distanceDfEval = distanceDfEval.withColumn("error", calcuateDifferenceInPredictedVsActualOffences_udf(distanceDfEval.predictedOffences, distanceDfEval.offenseType))
+    calcuateDifferenceInPredictedVsActualOffencesPercentage_udf = f.udf(calcuateDifferenceInPredictedVsActualOffencesPercentage, FloatType())
+    distanceDfEval = distanceDfEval.withColumn("pctCorrect", calcuateDifferenceInPredictedVsActualOffencesPercentage_udf(distanceDfEval.predictedOffences, distanceDfEval.offenseType))
     # distanceDfEval.select('caseID', 'predictedOffences', 'offenseType', 'error', 'pctCorrect').show(200, truncate=False)
-    # rmse = (distanceDfEval.groupBy().agg(f.sum('error')).collect()[0][0]/distanceDfEval.count())**(1.0/2)
-    # print("Offense category RMSE:", rmse)
-    # pctCorrectOffense = (distanceDfEval.groupBy().agg(f.sum('pctCorrect')).collect()[0][0] / distanceDfEval.count()) * 100
-    # print("Percentage of offenses correctly categorized: ", pctCorrectOffense)
-    # print("Num cases categorized:", distanceDf.count())
-    # print("Total cases available:", df.count())
+    rmse = (distanceDfEval.groupBy().agg(f.sum('error')).collect()[0][0]/distanceDfEval.count())**(1.0/2)
+    print("Offense category RMSE:", rmse)
+    pctCorrectOffense = (distanceDfEval.groupBy().agg(f.sum('pctCorrect')).collect()[0][0] / distanceDfEval.count()) * 100
+    print("Percentage of offenses correctly categorized: ", pctCorrectOffense)
+    print("Num cases categorized:", distanceDf.count())
+    print("Total cases available:", df.count())
 
     # QUANTIZATION OF SENTENCE DURATION
     # compute n-grams
@@ -93,7 +100,7 @@ def main():
     quantifiedDfEval = quantifiedDfEval.withColumn("actualDays", convertDurationsToDays_udf(quantifiedDfEval.duration1))
     quantifiedDfEval = quantifiedDfEval.withColumn("actualDays", quantifiedDfEval.actualDays[0])
     quantifiedDfEval = quantifiedDfEval.withColumn("correctlyPredicted", f.col('predictedDays') == f.col('actualDays'))
-    quantifiedDfEval.select('caseId', 'predictedDays', 'actualDays', 'timeKeywords').show(200, truncate=False)
+    # quantifiedDfEval.select('caseId', 'predictedDays', 'actualDays', 'timeKeywords').show(200, truncate=False)
     evaluator = RegressionEvaluator(metricName="rmse", labelCol="actualDays", predictionCol="predictedDays")
     rmse = evaluator.evaluate(quantifiedDfEval)
     print("Sentence duration RMSE:" + str(rmse))
@@ -105,26 +112,92 @@ def main():
     print("Percentage of sentences correctly predicted: ", pctCorrect)
 
     # SPLIT BY INDIGENOUS AND NON-INDIGENOUS
-    # categorizeByIndigeneity_udf = f.udf(categorizeByIndigeneity, BooleanType())
-    # ethnicityDf = df.withColumn("isIndigenous", categorizeByIndigeneity_udf(df.filteredFullText)).select('caseID', 'isIndigenous')
-    # ethnicityDf.cache()
+    categorizeByIndigeneity_udf = f.udf(categorizeByIndigeneity, IntegerType())
+    ethnicityDf = df.withColumn("isIndigenous", categorizeByIndigeneity_udf(df.filteredFullText)).select('caseID', 'isIndigenous')
+    ethnicityDf.cache()
     # ethnicityDf.show()
 
-    # CLUSTER
+    # COMBINE
     # combine all previous steps into single df
-    # fullyCategorizedDf = distanceDf.join(quantifiedDf.join(ethnicityDf, 'caseID'), 'caseID')\
-    #     .select('caseID', 'predictedOffences', 'predictedDays', 'isIndigenous')\
-    #     .filter(f.col('predictedDays') != 0.0)
-    # fullyCategorizedDf.cache()
-    # # fullyCategorizedDf.show(200, truncate=False)
-    #
-    # fullyCategorizedDfHashingTF = HashingTF(inputCol="predictedOffences", outputCol="predictedOffencesVector", numFeatures=8)
+    fullyCategorizedDf = distanceDf.join(quantifiedDf.join(ethnicityDf, 'caseID'), 'caseID')\
+        .select('caseID', 'predictedOffences', 'predictedOffencesIndex', 'predictedDays', 'isIndigenous')\
+        .filter(f.col('predictedDays') != 0.0)
+    fullyCategorizedDf = fullyCategorizedDf.na.drop()
+    fullyCategorizedDf.cache()
+    print("Total cases fully classified: ", fullyCategorizedDf.count())
+    # fullyCategorizedDf.show(200, truncate=False)
+
+    # fullyCategorizedDfHashingTF = HashingTF(inputCol="predictedOffences", outputCol="predictedOffencesVector", numFeatures=22)
     # fullyCategorizedDfFeaturized = fullyCategorizedDfHashingTF.transform(fullyCategorizedDf)
-    # # fullyCategorizedDfFeaturized.show(200, truncate=False)
+    # fullyCategorizedDfFeaturized.show(200, truncate=False)
+
+    # fit a CountVectorizerModel from the corpus.
+    # cv = CountVectorizer(inputCol="predictedOffences", outputCol="predictedOffencesVector", vocabSize=22, minDF=0.0)
     #
-    # # Split the data into training and test sets (30% held out for testing)
-    # (trainingData, testData) = fullyCategorizedDfFeaturized.randomSplit([0.7, 0.3], seed=1234)
+    # model = cv.fit(fullyCategorizedDf)
     #
+    # result = model.transform(fullyCategorizedDf)
+    # result.show(truncate=False)
+
+    # custom vectorizer
+    vectorizePredictedOffences_udf = f.udf(vectorizePredictedOffences, ArrayType(IntegerType()))
+    list_to_vector_udf = f.udf(lambda l: Vectors.dense(l), VectorUDT())
+    fullyCategorizedDfFeaturized = fullyCategorizedDf\
+        .withColumn('predictedOffencesVector', vectorizePredictedOffences_udf('predictedOffences'))\
+        .withColumn('predictedOffencesVector', list_to_vector_udf('predictedOffencesVector'))
+    # fullyCategorizedDfFeaturized.show(truncate=False)
+
+    # encoder = OneHotEncoderEstimator(inputCols=["predictedOffencesIndex", "isIndigenous"], outputCols=["predictedOffencesVector", "isIndigenousVector"])
+    # model = encoder.fit(fullyCategorizedDf)
+    # fullyCategorizedDfFeaturized = model.transform(fullyCategorizedDf)
+    # fullyCategorizedDfFeaturized.show(truncate=False)
+
+    # Split the data into indigenous and non-indigenous sets (30% held out for testing)
+    indigenousOffendersDf = fullyCategorizedDfFeaturized.filter(fullyCategorizedDfFeaturized.isIndigenous == 1)
+    print("Number of cases involving indigenous offenders:", indigenousOffendersDf.count())
+    nonIndigenousOffendersDf = fullyCategorizedDfFeaturized.filter(fullyCategorizedDfFeaturized.isIndigenous == 0)
+    print("Number of cases involving non-indigenous offenders:", nonIndigenousOffendersDf.count())
+
+    # meanByOffenceTypeIndigenousOffendersRows = indigenousOffendersDf\
+    #     .groupBy('predictedOffencesIndex')\
+    #     .agg({'predictedDays': 'mean'}).collect()
+    # print("\nMean of offences for indigenous offenders:")
+    # meanByOffenceTypeIndigenousOffenders = []
+    # for index, meanOfOffence in enumerate(meanByOffenceTypeIndigenousOffendersRows):
+    #     type = searchData[meanOfOffence[0]][0]
+    #     mean = meanOfOffence[1]
+    #     meanByOffenceTypeIndigenousOffenders.append((type, mean))
+    #     print(searchData[meanOfOffence[0]][0], meanOfOffence[1])
+    #
+    # meanByOffenceTypeNonIndigenousOffendersRows = nonIndigenousOffendersDf\
+    #     .groupBy('predictedOffencesIndex')\
+    #     .agg({'predictedDays': 'mean'}).collect()
+    # meanByOffenceTypeNonIndigenousOffenders = []
+    # for index, meanOfOffence in enumerate(meanByOffenceTypeNonIndigenousOffendersRows):
+    #     type = searchData[meanOfOffence[0]][0]
+    #     mean = meanOfOffence[1]
+    #     meanByOffenceTypeNonIndigenousOffenders.append((type, mean))
+    #     print(searchData[meanOfOffence[0]][0], meanOfOffence[1])
+    #
+    # listOffences = fullyCategorizedDfFeaturized.select(fullyCategorizedDfFeaturized.predictedOffences[0]).collect()
+    # x = []
+    # for offence in listOffences:
+    #     x.append(offence[0])
+    # y = fullyCategorizedDfFeaturized.select('predictedDays').collect()
+    # plt.figure(figsize=(8, 10))
+    # plt.scatter(x, y, label="Case")
+    # plt.scatter([x[0] for x in meanByOffenceTypeNonIndigenousOffenders], [x[1] for x in meanByOffenceTypeNonIndigenousOffenders], label="Mean (non-Indigenous)", s=90, c="cyan")
+    # plt.scatter([x[0] for x in meanByOffenceTypeIndigenousOffenders], [x[1] for x in meanByOffenceTypeIndigenousOffenders], label="Mean (Indigenous)", s=90, c="magenta")
+    # plt.xticks(rotation=-90)
+    # plt.ylabel("Days incarcerated")
+    # plt.xlabel("Offense type")
+    # plt.legend()
+    # plt.title("Estimated cases and sentence durations from full text analysis")
+    # plt.show()
+
+    # VISUALIZE CATEGORIZED DATA
+
+
     # # LINEAR REGRESSION
     # lr = LinearRegression(featuresCol="predictedOffencesVector", labelCol="predictedDays")
     #
@@ -145,21 +218,83 @@ def main():
     # print("RMSE of linear regression: %f" % trainingSummary.rootMeanSquaredError)
     # # print("r2: %f" % trainingSummary.r2)
     #
+
+
     # # GENERALIZED LINEAR REGRESSION (GAMMA DISTRIBUTION)
-    # glr = GeneralizedLinearRegression(featuresCol="predictedOffencesVector", labelCol="predictedDays", family="gaussian", link="identity", linkPredictionCol="p")
+    glr = GeneralizedLinearRegression(featuresCol="predictedOffencesVector", labelCol="predictedDays", family="gaussian", link="identity", linkPredictionCol="p")
     # # Train model.  This also runs the indexer.
-    # model = glr.fit(trainingData)
+    modelNonIndigenous = glr.fit(nonIndigenousOffendersDf)
+    # Make predictions.
+    predictionsNonIndigenous = modelNonIndigenous.transform(nonIndigenousOffendersDf)
+    # Select example rows to display.
+    # predictions.show()
+    evaluator = RegressionEvaluator(labelCol="predictedDays", predictionCol="prediction", metricName="rmse")
+    rmse = evaluator.evaluate(predictionsNonIndigenous)
+    print("RMSE of generalized linear regression (gaussian distribution) on non-indigenous data = %g" % rmse)
+
+    meanByOffenceTypeNonIndigenousOffendersRows = predictionsNonIndigenous\
+        .groupBy('predictedOffencesIndex')\
+        .agg({'prediction': 'mean'}).collect()
+    meanByOffenceTypeNonIndigenousOffenders = []
+    for index, meanOfOffence in enumerate(meanByOffenceTypeNonIndigenousOffendersRows):
+        type = searchData[meanOfOffence[0]][0]
+        mean = meanOfOffence[1]
+        meanByOffenceTypeNonIndigenousOffenders.append((type, mean))
+        print(searchData[meanOfOffence[0]][0], meanOfOffence[1])
+
+    # Train model.  This also runs the indexer.
+    modelIndigenous = glr.fit(indigenousOffendersDf)
+    # Make predictions.
+    predictionsIndigenous = modelIndigenous.transform(indigenousOffendersDf)
+    # Select example rows to display.
+    # predictions.show()
+    rmse = evaluator.evaluate(predictionsIndigenous)
+    print("RMSE of generalized linear regression (gaussian distribution) on indigenous data = %g" % rmse)
+
+    meanByOffenceTypeIndigenousOffendersRows = predictionsIndigenous\
+        .groupBy('predictedOffencesIndex')\
+        .agg({'prediction': 'mean'}).collect()
+    print("\nMean of offences for indigenous offenders:")
+    meanByOffenceTypeIndigenousOffenders = []
+    for index, meanOfOffence in enumerate(meanByOffenceTypeIndigenousOffendersRows):
+        type = searchData[meanOfOffence[0]][0]
+        mean = meanOfOffence[1]
+        meanByOffenceTypeIndigenousOffenders.append((type, mean))
+        print(searchData[meanOfOffence[0]][0], meanOfOffence[1])
     #
-    # # Make predictions.
-    # predictions = model.transform(testData)
-    #
-    # # Select example rows to display.
-    # predictions.show(200)
-    #
-    # evaluator = RegressionEvaluator(labelCol="predictedDays", predictionCol="prediction", metricName="rmse")
-    # rmse = evaluator.evaluate(predictions)
-    # print("Root Mean Squared Error (RMSE) of generalized linear regression (gaussian distribution) on test data = %g" % rmse)
-    #
+    # plt.figure(figsize=(8, 10))
+    # plt.scatter([x[0] for x in meanByOffenceTypeNonIndigenousOffenders], [x[1] for x in meanByOffenceTypeNonIndigenousOffenders], label="Mean (non-Indigenous)", s=90, c="cyan")
+    # plt.scatter([x[0] for x in meanByOffenceTypeIndigenousOffenders], [x[1] for x in meanByOffenceTypeIndigenousOffenders], label="Mean (Indigenous)", s=90, c="magenta")
+    # plt.xticks(rotation=-90)
+    # plt.ylabel("Days incarcerated")
+    # plt.xlabel("Offense type")
+    # plt.title("Generalized linear regression (gaussian distribution) predictions")
+    # plt.legend()
+    # plt.show()
+
+
+    meanByOffenceTypeNonIndigenousOffendersDict = dict(meanByOffenceTypeNonIndigenousOffenders)
+    meanByOffenceTypeIndigenousOffendersDict = dict(meanByOffenceTypeIndigenousOffenders)
+    for offenceType in searchData:
+        if offenceType[0] not in meanByOffenceTypeIndigenousOffendersDict:
+            meanByOffenceTypeIndigenousOffenders.append((offenceType[0], 0))
+        if offenceType[0] not in meanByOffenceTypeNonIndigenousOffendersDict:
+            meanByOffenceTypeNonIndigenousOffenders.append((offenceType[0], 0))
+
+    numCategories = len(meanByOffenceTypeIndigenousOffenders)
+    ind = np.arange(numCategories)
+    plotBarWidth = 0.3
+    plt.figure(figsize=(8, 10))
+    plt.bar(ind+plotBarWidth, [x[1] for x in meanByOffenceTypeNonIndigenousOffenders], plotBarWidth, label="Mean (non-Indigenous)", color="cyan")
+    plt.bar(ind, [x[1] for x in meanByOffenceTypeIndigenousOffenders], plotBarWidth, label="Mean (Indigenous)", color="magenta")
+    plt.xticks(ind + plotBarWidth / 2, [x[0] for x in meanByOffenceTypeIndigenousOffenders], rotation=-90)
+    plt.ylabel("Days incarcerated")
+    plt.xlabel("Offense type")
+    plt.title("Generalized linear regression (gaussian distribution) predictions")
+    plt.legend()
+    plt.show()
+
+
     # # DECISION TREE REGRESSION
     # # Train a DecisionTree model.
     # dt = DecisionTreeRegressor(featuresCol="predictedOffencesVector", labelCol="predictedDays")
@@ -171,7 +306,7 @@ def main():
     # predictions = model.transform(testData)
     #
     # # Select example rows to display.
-    # predictions.show(200)
+    # predictions.show()
     #
     # evaluator = RegressionEvaluator(labelCol="predictedDays", predictionCol="prediction", metricName="rmse")
     # rmse = evaluator.evaluate(predictions)
@@ -179,19 +314,65 @@ def main():
     #
     # # RANDOM FOREST REGRESSION
     # rf = RandomForestRegressor(featuresCol="predictedOffencesVector", labelCol="predictedDays", numTrees=30)
-    # # Train model.  This also runs the indexer.
-    # model = rf.fit(trainingData)
-    #
+    # modelNonIndigenous = rf.fit(nonIndigenousOffendersDf)
     # # Make predictions.
-    # predictions = model.transform(testData)
-    #
+    # predictionsNonIndigenous = modelNonIndigenous.transform(nonIndigenousOffendersDf)
     # # Select example rows to display.
-    # predictions.show(200)
-    #
+    # # predictions.show()
     # evaluator = RegressionEvaluator(labelCol="predictedDays", predictionCol="prediction", metricName="rmse")
-    # rmse = evaluator.evaluate(predictions)
-    # print("Root Mean Squared Error (RMSE) of random forest on test data = %g" % rmse)
+    # rmse = evaluator.evaluate(predictionsNonIndigenous)
+    # print("RMSE of generalized linear regression (gaussian distribution) on non-indigenous data = %g" % rmse)
     #
+    # meanByOffenceTypeNonIndigenousOffendersRows = predictionsNonIndigenous\
+    #     .groupBy('predictedOffencesIndex')\
+    #     .agg({'prediction': 'mean'}).collect()
+    # meanByOffenceTypeNonIndigenousOffenders = []
+    # for index, meanOfOffence in enumerate(meanByOffenceTypeNonIndigenousOffendersRows):
+    #     type = searchData[meanOfOffence[0]][0]
+    #     mean = meanOfOffence[1]
+    #     meanByOffenceTypeNonIndigenousOffenders.append((type, mean))
+    #     print(searchData[meanOfOffence[0]][0], meanOfOffence[1])
+    #
+    # # Train model.  This also runs the indexer.
+    # modelIndigenous = rf.fit(indigenousOffendersDf)
+    # # Make predictions.
+    # predictionsIndigenous = modelIndigenous.transform(indigenousOffendersDf)
+    # # Select example rows to display.
+    # predictionsIndigenous.show()
+    # rmse = evaluator.evaluate(predictionsIndigenous)
+    # print("RMSE of generalized linear regression (gaussian distribution) on indigenous data = %g" % rmse)
+    #
+    # meanByOffenceTypeIndigenousOffendersRows = predictionsIndigenous\
+    #     .groupBy('predictedOffencesIndex')\
+    #     .agg({'prediction': 'mean'}).collect()
+    # print("\nMean of offences for indigenous offenders:")
+    # meanByOffenceTypeIndigenousOffenders = []
+    # for index, meanOfOffence in enumerate(meanByOffenceTypeIndigenousOffendersRows):
+    #     type = searchData[meanOfOffence[0]][0]
+    #     mean = meanOfOffence[1]
+    #     meanByOffenceTypeIndigenousOffenders.append((type, mean))
+    #     print(searchData[meanOfOffence[0]][0], meanOfOffence[1])
+    # meanByOffenceTypeNonIndigenousOffendersDict = dict(meanByOffenceTypeNonIndigenousOffenders)
+    # meanByOffenceTypeIndigenousOffendersDict = dict(meanByOffenceTypeIndigenousOffenders)
+    # for offenceType in searchData:
+    #     if offenceType[0] not in meanByOffenceTypeIndigenousOffendersDict:
+    #         meanByOffenceTypeIndigenousOffenders.append((offenceType[0], 0))
+    #     if offenceType[0] not in meanByOffenceTypeNonIndigenousOffendersDict:
+    #         meanByOffenceTypeNonIndigenousOffenders.append((offenceType[0], 0))
+    #
+    # numCategories = len(meanByOffenceTypeNonIndigenousOffenders)
+    # ind = np.arange(numCategories)
+    # plotBarWidth = 0.3
+    # plt.figure(figsize=(8, 10))
+    # plt.bar(ind, [x[1] for x in meanByOffenceTypeIndigenousOffenders], plotBarWidth, label="Mean (Indigenous)", color="magenta")
+    # plt.bar(ind+plotBarWidth, [x[1] for x in meanByOffenceTypeNonIndigenousOffenders], plotBarWidth, label="Mean (non-Indigenous)", color="cyan")
+    # plt.xticks(ind + plotBarWidth / 2, [x[0] for x in meanByOffenceTypeNonIndigenousOffenders], rotation=-90)
+    # plt.ylabel("Days incarcerated")
+    # plt.xlabel("Offense type")
+    # plt.title("Random forest regression predictions")
+    # plt.legend()
+    # plt.show()
+
     # # GRADIENT BOOSTED TREE REGRESSION
     #
     # gbt = GBTRegressor(featuresCol="predictedOffencesVector", labelCol="predictedDays", maxIter=10)
@@ -202,7 +383,7 @@ def main():
     # predictions = model.transform(testData)
     #
     # # Select example rows to display.
-    # predictions.show(200)
+    # predictions.show()
     #
     # evaluator = RegressionEvaluator(labelCol="predictedDays", predictionCol="prediction", metricName="rmse")
     # rmse = evaluator.evaluate(predictions)
@@ -215,32 +396,64 @@ def main():
     # predictions = model.transform(testData)
     #
     # # Select example rows to display.
-    # predictions.show(200)
+    # predictions.show()
     #
     # evaluator = RegressionEvaluator(labelCol="predictedDays", predictionCol="prediction", metricName="rmse")
     # rmse = evaluator.evaluate(predictions)
     # print("Root Mean Squared Error (RMSE) of isotonic on test data = %g" % rmse)
-    #
-    # # K-MEANS
-    # # Trains a k-means model.
+
+    # K-MEANS
+    # Trains a k-means model.
     # kmeans = KMeans(featuresCol="predictedOffencesVector", k=10, seed=1234)
-    # model = kmeans.fit(trainingData)
+    # model = kmeans.fit(fullyCategorizedDfFeaturized)
     #
     # # Make predictions
-    # predictions = model.transform(testData)
+    # predictions = model.transform(fullyCategorizedDfFeaturized)
+    # predictions.show(500, truncate=False)
     #
     # # Evaluate clustering by computing Silhouette score
     # evaluator = ClusteringEvaluator(featuresCol="predictedOffencesVector")
     #
     # silhouette = evaluator.evaluate(predictions)
     # print("Silhouette with squared euclidean distance = " + str(silhouette))
-    #
-    # # Shows the result.
+
+    # Shows the result.
     # centers = model.clusterCenters()
     # print("Cluster Centers: ")
     # for center in centers:
     #     print(center)
+
+    # K-MODES
+
+    # n_clusters = 20
+    # max_iter = 10
+    # method = EnsembleKModes(n_clusters, max_iter)
+    # model = method.fit(fullyCategorizedDfFeaturized.select('predictedOffencesIndex', 'predictedDays').rdd)
+
+    # print(model.clusters)
+    # print(method.mean_cost)
+    # predictions = method.predictions
+    # datapoints = method.indexed_rdd
+    # combined = datapoints.zip(predictions)
+    # print(combined.take(10))
+
+    # centroids = model.clusters
+
+    # model.predict(rdd).take(5)
+    # model.predict(sc.parallelize(['e', 'e', 'f', 'e', 'e', 'f', 'g', 'e', 'f', 'e'])).collect()
+
     # VISUALIZE RESULTS
+    # x = predictions.select('isIndigenous').collect()
+    # listOffences = predictions.select(predictions.predictedOffences[0]).collect()
+    # x = []
+    # for offence in listOffences:
+    #     x.append(offence[0])
+    # y = predictions.select('predictedDays').collect()
+    # plt.figure(figsize=(8, 10))
+    # plt.scatter(x, y)
+    # plt.scatter([x[0] for x in centroids], [x[1] for x in centroids], s=90, c="red")
+    # plt.xticks(rotation=-80)
+    # plt.show()
 
 
 stop_words = ['the', 'of', 'to', 'and', 'a', 'in', 'that', 'is', 'for', 'was', 'be', 'on', 'not', 'his', 'he', 'as',
@@ -269,7 +482,7 @@ searchData = [("assault", ['aggravated', 'assaulted', 'domestic', 'fight', 'assa
               ("breach of trust", ['trust']),
               ("forcible confinement", ['forcible', 'confinement', 'kidnap', 'kidnapping']),
               ("regulatory offences", ['regulatory', 'municipal']),
-              ("offences relating to public or peace officer", ['obstruction', '129', 'peace', 'officer']),
+              ("offences against police", ['obstruction', '129', 'peace', 'officer']),
               ("attempt offences", ['attempt', 'attempted', 'commit']),
               ("driving offences", ['253', 'driving', 'highway', 'traffic', 'suspended', 'hta', 'stunt', 'plates', 'careless', 'automobile', 'motor', 'vehicle', 'operate']),
               ("court-related offences", ['perjury', 'breaching', 'breach', 'breached', 'conditions', 'condition', 'order', 'comply', 'curfew', 'terms' '731', '139', '145', '264', 'ltso']),
@@ -340,7 +553,7 @@ def filterExtraOffences(listOffences, listDistances):
         newListOffences.append(listOffences[0])
         firstDistance = listDistances[0]
         for index, distance in enumerate(listDistances[1:], 1):
-            if len(newListOffences) >= 2:
+            if len(newListOffences) >= 1:
                 break
             else:
                 if distance - firstDistance < 0.04:
@@ -431,7 +644,10 @@ def categorizeByIndigeneity(listWords):
         if word in indigenousRelatedWords:
             isIndigenous = True
             break
-    return isIndigenous
+    if isIndigenous:
+        return 1
+    else:
+        return 0
 
 
 def calcuateDifferenceInPredictedVsActualOffences(predictedArray, actualArray):
@@ -467,28 +683,27 @@ def calcuateDifferenceInPredictedVsActualOffencesPercentage(predictedArray, actu
             if offenceL == offenceS:
                 found += 1
                 break
-    return found/len(longer)
+    # return found/len(longer)
+    if found > 0:
+        return 1.0
+    else:
+        return 0.0
 
-# def findOffenseCategory(hash):
-#     model.approxNearestNeighbors(dfToSearch, hash, 2).show()
-#     asdf = []
-#     asdf.append('hey')
-#     return asdf
-#
-#
-# def searchForCategories(model, dfToSearch, df):
-#     findOffenseCategory_udf = f.udf(findOffenseCategory, ArrayType(StringType()))
-#     df.withColumn("offenseCategory", findOffenseCategory_udf(df.filteredFullText))
-#     return df
+def vectorizePredictedOffences(listOffences):
+    vector = [0] * len(searchData)
+    for offence in listOffences:
+        for index, category in enumerate(searchData):
+            if offence == category[0]:
+                vector[index] = 1
+                break
+    return vector
 
 
-# def topWords(words, vocabulary, num=5):
-#     top = max(words[1])
-#
-#
-# def mostUsedWords(df, vocabulary, num=5):
-#     topWords_udf = f.udf(topWords, ArrayType(StringType()))
-#     df = df.withColumn("fullTextCleaned", cleanFT_udf(df.fullText))
+def assignOffenceNumericalCategory(listOffences):
+    for index, category in enumerate(searchData):
+        if listOffences[0] == category[0]:
+            return index
+
 
 def text2int (textnum, numwords={}):
     if not numwords:
